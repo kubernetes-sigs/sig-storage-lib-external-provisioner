@@ -1,16 +1,20 @@
-# Kubernetes Template Project
+# sig-storage-lib-external-provisioner
 
-The Kubernetes Template Project is a template for starting new projects in the GitHub organizations owned by Kubernetes. All Kubernetes projects, at minimum, must have the following files:
+A library for writing [external provisioners](https://kubernetes.io/docs/concepts/storage/storage-classes/#provisioner). See [external-storage](https://github.com/kubernetes-incubator/external-storage) for community-maintained external provisioners that use this library.
 
-- a `README.md` outlining the project goals, sponsoring sig, and community contact information
-- an `OWNERS` with the project leads listed as approvers ([docs on `OWNERS` files][owners])
-- a `CONTRIBUTING.md` outlining how to contribute to the project
-- an unmodified copy of `code-of-conduct.md` from this repo, which outlines community behavior and the consequences of breaking the code
-- a `LICENSE` which must be Apache 2.0 for code projects, or [Creative Commons 4.0] for documentation repositories, without any custom content
-- a `SECURITY_CONTACTS` with the contact points for the Product Security Team 
-  to reach out to for triaging and handling of incoming issues. They must agree to abide by the
-  [Embargo Policy](https://github.com/kubernetes/sig-release/blob/master/security-release-process-documentation/security-release-process.md#embargo-policy) 
-  and will be removed and replaced if they violate that agreement.
+## Packages
+### `controller`
+Contains the Provisioner interface and ProvisionController, a custom Kubernetes [controller](https://github.com/kubernetes/community/blob/master/contributors/devel/controllers.md) that watches PersistentVolumes and PersistentVolumeClaims. Implement the Provisioner interface, pass the implementation to a ProvisionController, and Run the controller, which then takes care of calling the Provisioner's Provision or Delete as needed.
+
+## Optional Packages
+### `util`
+Contains an assortment of useful functions, e.g. any used by [in-tree plugins](https://github.com/kubernetes/kubernetes/tree/master/pkg/volume) that aren't otherwise easily importable.
+
+### `gidallocator` and `allocator`
+`gidallocator` is used to allocate a GID from a range specified by StorageClass parameters gidMin & gidMax. `allocator` is the underlying implementation and can be used to write other allocators. An example use-case for `gidallocator` is an NFS-based provisioner that chowns each export to a unique GID. See [Volume Security](https://docs.openshift.com/container-platform/3.11/install_config/persistent_storage/pod_security_context.html#supplemental-groups/) for more context. Adapted from the in-tree [glusterfs plugin](https://github.com/kubernetes/kubernetes/blob/master/pkg/volume/glusterfs).
+
+### `mount`
+Is used to read the mount table. Copied from [moby](https://github.com/moby/moby/tree/17.05.x/pkg/mount).
 
 ## Community, discussion, contribution, and support
 
