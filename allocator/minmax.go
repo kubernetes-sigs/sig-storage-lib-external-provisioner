@@ -191,4 +191,3 @@ func (a *MinMaxAllocator) Free() int {
 func (a *MinMaxAllocator) inRange(i int) bool {
 	return a.min <= i && i <= a.max
 }
-

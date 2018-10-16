@@ -1,4 +1,5 @@
-# Copyright 2018 The Kubernetes Authors.
+#!/usr/bin/env bash
+# Copyright 2017 The Kubernetes Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,17 +13,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-verify:
-	go get -u github.com/alecthomas/gometalinter
-	gometalinter --install
-	repo-infra/verify/verify-go-src.sh -v
-	repo-infra/verify/verify-boilerplate.sh
+set -o errexit
+set -o nounset
+set -o pipefail
 
-test:
-	-dep init
-	dep ensure
-	go test ./controller
-	go test ./allocator
+PKG=$1
+COMMIT=$2
+export GOPATH=$3
+export GOBIN="$GOPATH/bin"
 
-clean:
-	rm -rf ./vendor
+go get -d -u "${PKG}"
+cd "${GOPATH}/src/${PKG}"
+git checkout -q "${COMMIT}"
+go install "${PKG}"

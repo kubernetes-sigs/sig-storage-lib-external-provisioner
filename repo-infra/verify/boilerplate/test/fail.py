@@ -1,4 +1,8 @@
-# Copyright 2018 The Kubernetes Authors.
+#!/usr/bin/env python
+
+# Copyright 2015 The Kubernetes Authors.
+#
+# failed
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -11,18 +15,3 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
-verify:
-	go get -u github.com/alecthomas/gometalinter
-	gometalinter --install
-	repo-infra/verify/verify-go-src.sh -v
-	repo-infra/verify/verify-boilerplate.sh
-
-test:
-	-dep init
-	dep ensure
-	go test ./controller
-	go test ./allocator
-
-clean:
-	rm -rf ./vendor
