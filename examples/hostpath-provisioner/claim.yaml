@@ -1,0 +1,11 @@
+kind: PersistentVolumeClaim
+apiVersion: v1
+metadata:
+  name: hostpath-pvc
+spec:
+  storageClassName: "example-hostpath"
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 1Mi

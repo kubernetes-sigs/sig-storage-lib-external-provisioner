@@ -1,4 +1,4 @@
-# Copyright 2018 The Kubernetes Authors.
+# Copyright 2016 The Kubernetes Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,25 +12,21 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-all: verify test
+IMAGE?=hostpath-provisioner
+
+all: dep hostpath-provisioner image
 
 dep:
 	-dep init
 	dep ensure
 
-verify: dep
-	go get -u github.com/alecthomas/gometalinter
-	gometalinter --install
-	repo-infra/verify/verify-go-src.sh -v
-	repo-infra/verify/verify-boilerplate.sh
+hostpath-provisioner:
+	CGO_ENABLED=0 go build -a -ldflags '-extldflags "-static"' -o hostpath-provisioner .
 
-test: dep
-	go test ./controller
-	go test ./allocator
+image: hostpath-provisioner
+	docker build -t $(IMAGE) -f Dockerfile.scratch .
 
 clean:
-	rm -rf ./vendor
-	rm -rf ./Gopkg.lock
-	rm -rf ./examples/hostpath-provisioner/vendor
-	rm -rf ./examples/hostpath-provisioner/Gopkg.lock
-	rm -rf ./test/e2e/kubernetes
+	rm -rf vendor
+	rm -rf Gopkg.lock
+	rm -rf hostpath-provisioner
