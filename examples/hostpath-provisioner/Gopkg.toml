@@ -30,19 +30,19 @@
   name = "github.com/golang/glog"
 
 [[constraint]]
-  branch = "master"
+  branch = "release-1.12"
   name = "github.com/kubernetes-sigs/sig-storage-lib-external-provisioner"
 
 [[constraint]]
-  branch = "master"
+  branch = "release-1.12"
   name = "k8s.io/api"
 
 [[constraint]]
-  branch = "master"
+  branch = "release-1.12"
   name = "k8s.io/apimachinery"
 
 [[constraint]]
-  branch = "master"
+  branch = "release-9.0"
   name = "k8s.io/client-go"
 
 [prune]

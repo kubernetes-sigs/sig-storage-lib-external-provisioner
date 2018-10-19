@@ -42,16 +42,20 @@
   name = "golang.org/x/time"
 
 [[constraint]]
-  branch = "master"
+  branch = "release-1.12"
   name = "k8s.io/api"
 
 [[constraint]]
-  branch = "master"
+  branch = "release-1.12"
   name = "k8s.io/apimachinery"
 
 [[constraint]]
-  branch = "master"
+  branch = "release-9.0"
   name = "k8s.io/client-go"
+
+[[constraint]]
+  branch = "release-1.12"
+  name = "k8s.io/kubernetes"
 
 [prune]
   go-tests = true

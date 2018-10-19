@@ -17,7 +17,7 @@
 set -x
 PS4='+\t '
 
-curl -L https://dl.k8s.io/v1.13.0-alpha.1/kubernetes-server-linux-amd64.tar.gz | tar xz
+curl -L https://dl.k8s.io/v1.12.0/kubernetes-server-linux-amd64.tar.gz | tar xz
 tar xz -f kubernetes/kubernetes-src.tar.gz -C kubernetes
 
 kubernetes/hack/install-etcd.sh
