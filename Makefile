@@ -15,6 +15,7 @@
 all: verify test
 
 dep:
+	cp .Gopkg.toml Gopkg.toml
 	-dep init
 	dep ensure
 
