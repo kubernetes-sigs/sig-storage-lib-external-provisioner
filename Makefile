@@ -30,6 +30,7 @@ test: dep
 
 clean:
 	rm -rf ./vendor
+	rm -rf ./Gopkg.toml
 	rm -rf ./Gopkg.lock
 	rm -rf ./examples/hostpath-provisioner/vendor
 	rm -rf ./examples/hostpath-provisioner/Gopkg.lock
