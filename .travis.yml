@@ -1,0 +1,10 @@
+language: go
+go:
+  - 1.11.1
+services: docker
+install:
+  - curl https://raw.githubusercontent.com/golang/dep/master/install.sh | sh
+script:
+  - make verify
+  - make test
+  - ./test/e2e/test.sh
