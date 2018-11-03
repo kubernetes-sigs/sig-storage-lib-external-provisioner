@@ -47,6 +47,13 @@ type Qualifier interface {
 	ShouldProvision(*v1.PersistentVolumeClaim) bool
 }
 
+// DeletionGuard is an optional interface implemented by provisioners to determine
+// whether a PV should be deleted.
+type DeletionGuard interface {
+	// ShouldDelete returns whether deleting the PV should be attempted.
+	ShouldDelete(volume *v1.PersistentVolume) bool
+}
+
 // BlockProvisioner is an optional interface implemented by provisioners to determine
 // whether it supports block volume.
 type BlockProvisioner interface {
