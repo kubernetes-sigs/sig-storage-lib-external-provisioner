@@ -77,6 +77,9 @@ const annStorageProvisioner = "volume.beta.kubernetes.io/storage-provisioner"
 // be dynamically provisioned. Its value is the name of the selected node.
 const annSelectedNode = "volume.kubernetes.io/selected-node"
 
+// Finalizer for PVs so we know to clean them up
+const finalizerPV = "external-provisioner.volume.kubernetes.io/finalizer"
+
 // ProvisionController is a controller that provisions PersistentVolumes for
 // PersistentVolumeClaims.
 type ProvisionController struct {
@@ -857,7 +860,7 @@ func (ctrl *ProvisionController) shouldDelete(volume *v1.PersistentVolume) bool 
 	// In 1.9+ PV protection means the object will exist briefly with a
 	// deletion timestamp even after our successful Delete. Ignore it.
 	if ctrl.kubeVersion.AtLeast(utilversion.MustParseSemantic("v1.9.0")) {
-		if volume.ObjectMeta.DeletionTimestamp != nil {
+		if !ctrl.checkFinalizer(volume, finalizerPV) && volume.ObjectMeta.DeletionTimestamp != nil {
 			return false
 		}
 	}
@@ -897,6 +900,15 @@ func (ctrl *ProvisionController) canProvision(claim *v1.PersistentVolumeClaim) e
 	}
 
 	return nil
+}
+
+func (ctrl *ProvisionController) checkFinalizer(volume *v1.PersistentVolume, finalizer string) bool {
+	for _, f := range volume.ObjectMeta.Finalizers {
+		if f == finalizer {
+			return true
+		}
+	}
+	return false
 }
 
 func (ctrl *ProvisionController) updateProvisionStats(claim *v1.PersistentVolumeClaim, err error, startTime time.Time) {
@@ -1034,6 +1046,11 @@ func (ctrl *ProvisionController) provisionClaimOperation(claim *v1.PersistentVol
 	// Set ClaimRef and the PV controller will bind and set annBoundByController for us
 	volume.Spec.ClaimRef = claimRef
 
+	// Add external provisioner finalizer if it doesn't already have it
+	if !ctrl.checkFinalizer(volume, finalizerPV) {
+		volume.ObjectMeta.Finalizers = append(volume.ObjectMeta.Finalizers, finalizerPV)
+	}
+
 	metav1.SetMetaDataAnnotation(&volume.ObjectMeta, annDynamicallyProvisioned, ctrl.provisionerName)
 	if ctrl.kubeVersion.AtLeast(utilversion.MustParseSemantic("v1.6.0")) {
 		volume.Spec.StorageClassName = claimClass
@@ -1136,6 +1153,40 @@ func (ctrl *ProvisionController) deleteVolumeOperation(volume *v1.PersistentVolu
 		// try to delete the volume again on next update.
 		glog.Info(logOperation(operation, "failed to delete persistentvolume: %v", err))
 		return err
+	}
+
+	if len(newVolume.ObjectMeta.Finalizers) > 0 {
+		// Remove external-provisioner finalizer
+
+		// need to get the pv again because the delete has updated the object with a deletion timestamp
+		newVolume, err := ctrl.client.CoreV1().PersistentVolumes().Get(volume.Name, metav1.GetOptions{})
+		if err != nil {
+			// If the volume is not found return, otherwise error
+			if !apierrs.IsNotFound(err) {
+				glog.Info(logOperation(operation, "failed to get persistentvolume to update finalizer: %v", err))
+				return err
+			}
+			return nil
+		}
+		finalizers := make([]string, 0)
+		for _, finalizer := range newVolume.ObjectMeta.Finalizers {
+			if finalizer != finalizerPV {
+				finalizers = append(finalizers, finalizer)
+			}
+		}
+
+		// Only update the finalizers if we actually removed something
+		if len(finalizers) != len(newVolume.ObjectMeta.Finalizers) {
+			newVolume.ObjectMeta.Finalizers = finalizers
+			if _, err = ctrl.client.CoreV1().PersistentVolumes().Update(newVolume); err != nil {
+				if !apierrs.IsNotFound(err) {
+					// Couldn't remove finalizer and the object still exists, the controller may
+					// try to remove the finalizer again on the next update
+					glog.Info(logOperation(operation, "failed to remove finalizer for persistentvolume: %v", err))
+					return err
+				}
+			}
+		}
 	}
 
 	glog.Info(logOperation(operation, "persistentvolume deleted"))
