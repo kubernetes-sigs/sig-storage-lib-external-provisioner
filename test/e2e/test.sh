@@ -35,7 +35,12 @@ kubectl create -f ./pod.yaml
 kubectl create -f ./class.yaml
 kubectl create -f ./claim.yaml
 kubectl create -f ./test-pod.yaml
-timeout 10 bash -c "until kubectl get pod test-pod -o=jsonpath='{.status.phase}' | grep -E 'Succeeded|Failed'; do sleep 1; done"
+timeout 30 bash -c "until kubectl get pod test-pod -o=jsonpath='{.status.phase}' | grep -E 'Succeeded|Failed'; do sleep 1; done"
+kubectl describe pod test-pod
+kubectl describe pod hostpath-provisioner
+kubectl logs hostpath-provisioner
+kubectl describe pvc
+kubectl describe pv
 if [ $? == 0 ] && kubectl get pod test-pod -o=jsonpath='{.status.phase}' | grep -q Succeeded; then
   #./dind-cluster-v1.13.sh down
   exit 0
