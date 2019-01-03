@@ -823,6 +823,23 @@ func (ctrl *ProvisionController) shouldProvision(claim *v1.PersistentVolumeClaim
 	if ctrl.kubeVersion.AtLeast(utilversion.MustParseSemantic("v1.5.0")) {
 		if provisioner, found := claim.Annotations[annStorageProvisioner]; found {
 			if provisioner == ctrl.provisionerName {
+				claimClass := util.GetPersistentVolumeClaimClass(claim)
+				_, _, mode, err := ctrl.getStorageClassFields(claimClass)
+				if err != nil {
+					glog.Errorf("Error getting claim %q's StorageClass's fields: %v", claimToClaimKey(claim), err)
+					return false
+				}
+				if mode != nil && *mode == storage.VolumeBindingWaitForFirstConsumer {
+					// When claim is in delay binding mode, annSelectedNode is
+					// required to provision volume.
+					// Though PV controller set annStorageProvisioner only when
+					// annSelectedNode is set, but provisioner may remove
+					// annSelectedNode to notify scheduler to reschedule again.
+					if selectedNode, ok := claim.Annotations[annSelectedNode]; ok && selectedNode != "" {
+						return true
+					}
+					return false
+				}
 				return true
 			}
 			return false
@@ -830,7 +847,7 @@ func (ctrl *ProvisionController) shouldProvision(claim *v1.PersistentVolumeClaim
 	} else {
 		// Kubernetes 1.4 provisioning, evaluating class.Provisioner
 		claimClass := util.GetPersistentVolumeClaimClass(claim)
-		provisioner, _, err := ctrl.getStorageClassFields(claimClass)
+		provisioner, _, _, err := ctrl.getStorageClassFields(claimClass)
 		if err != nil {
 			glog.Errorf("Error getting claim %q's StorageClass's fields: %v", claimToClaimKey(claim), err)
 			return false
@@ -922,6 +939,26 @@ func (ctrl *ProvisionController) updateDeleteStats(volume *v1.PersistentVolume, 
 	}
 }
 
+// rescheduleProvisioning signal back to the scheduler to retry dynamic provisioning
+// by removing the annSelectedNode annotation
+func (ctrl *ProvisionController) rescheduleProvisioning(claim *v1.PersistentVolumeClaim) {
+	if _, ok := claim.Annotations[annSelectedNode]; !ok {
+		// Provisioning not triggered by the scheduler, skip
+		return
+	}
+
+	// The claim from method args can be pointing to watcher cache. We must not
+	// modify these, therefore create a copy.
+	newClaim := claim.DeepCopy()
+	delete(newClaim.Annotations, annSelectedNode)
+	// Try to update the PVC object
+	if _, err := ctrl.client.CoreV1().PersistentVolumeClaims(newClaim.Namespace).Update(newClaim); err != nil {
+		glog.V(4).Infof("Failed to delete annotation 'annSelectedNode' for PersistentVolumeClaim %q: %v", claimToClaimKey(newClaim), err)
+	}
+
+	// TODO save updated claim into informer cache to avoid operations on old claim?
+}
+
 // provisionClaimOperation attempts to provision a volume for the given claim.
 // Returns error, which indicates whether provisioning should be retried
 // (requeue the claim) or not
@@ -950,7 +987,7 @@ func (ctrl *ProvisionController) provisionClaimOperation(claim *v1.PersistentVol
 		return nil
 	}
 
-	provisioner, parameters, err := ctrl.getStorageClassFields(claimClass)
+	provisioner, parameters, _, err := ctrl.getStorageClassFields(claimClass)
 	if err != nil {
 		glog.Error(logOperation(operation, "error getting claim's StorageClass's fields: %v", err))
 		return nil
@@ -1026,6 +1063,14 @@ func (ctrl *ProvisionController) provisionClaimOperation(claim *v1.PersistentVol
 		}
 		err = fmt.Errorf("failed to provision volume with StorageClass %q: %v", claimClass, err)
 		ctrl.eventRecorder.Event(claim, v1.EventTypeWarning, "ProvisioningFailed", err.Error())
+		if _, ok := claim.Annotations[annSelectedNode]; ok {
+			// For dynamic PV provisioning with delay binding, provisioner may fail
+			// because node is wrong. `selectedNode` must be removed to notify
+			// scheduler to schedule again.
+			// No need to handle error here, because if `selectedNode` is failed to
+			// be removed, next retry will remove it again.
+			ctrl.rescheduleProvisioning(claim)
+		}
 		return err
 	}
 
@@ -1170,13 +1215,13 @@ func (ctrl *ProvisionController) getProvisionedVolumeNameForClaim(claim *v1.Pers
 	return "pvc-" + string(claim.UID)
 }
 
-func (ctrl *ProvisionController) getStorageClassFields(name string) (string, map[string]string, error) {
+func (ctrl *ProvisionController) getStorageClassFields(name string) (string, map[string]string, *storage.VolumeBindingMode, error) {
 	classObj, found, err := ctrl.classes.GetByKey(name)
 	if err != nil {
-		return "", nil, err
+		return "", nil, nil, err
 	}
 	if !found {
-		return "", nil, fmt.Errorf("storageClass %q not found", name)
+		return "", nil, nil, fmt.Errorf("storageClass %q not found", name)
 		// 3. It tries to find a StorageClass instance referenced by annotation
 		//    `claim.Annotations["volume.beta.kubernetes.io/storage-class"]`. If not
 		//    found, it SHOULD report an error (by sending an event to the claim) and it
@@ -1184,11 +1229,11 @@ func (ctrl *ProvisionController) getStorageClassFields(name string) (string, map
 	}
 	switch class := classObj.(type) {
 	case *storage.StorageClass:
-		return class.Provisioner, class.Parameters, nil
+		return class.Provisioner, class.Parameters, class.VolumeBindingMode, nil
 	case *storagebeta.StorageClass:
-		return class.Provisioner, class.Parameters, nil
+		return class.Provisioner, class.Parameters, (*storage.VolumeBindingMode)(class.VolumeBindingMode), nil
 	}
-	return "", nil, fmt.Errorf("cannot convert object to StorageClass: %+v", classObj)
+	return "", nil, nil, fmt.Errorf("cannot convert object to StorageClass: %+v", classObj)
 }
 
 func claimToClaimKey(claim *v1.PersistentVolumeClaim) string {
