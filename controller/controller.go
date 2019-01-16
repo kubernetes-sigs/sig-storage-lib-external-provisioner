@@ -249,7 +249,7 @@ func CreateProvisionedPVInterval(createProvisionedPVInterval time.Duration) func
 }
 
 // FailedProvisionThreshold is the threshold for max number of retries on
-// failures of Provision. Defaults to 15.
+// failures of Provision. Set to 0 to retry indefinitely. Defaults to 15.
 func FailedProvisionThreshold(failedProvisionThreshold int) func(*ProvisionController) error {
 	return func(c *ProvisionController) error {
 		if c.HasRun() {
@@ -261,7 +261,7 @@ func FailedProvisionThreshold(failedProvisionThreshold int) func(*ProvisionContr
 }
 
 // FailedDeleteThreshold is the threshold for max number of retries on failures
-// of Delete. Defaults to 15.
+// of Delete. Set to 0 to retry indefinitely. Defaults to 15.
 func FailedDeleteThreshold(failedDeleteThreshold int) func(*ProvisionController) error {
 	return func(c *ProvisionController) error {
 		if c.HasRun() {
@@ -684,7 +684,10 @@ func (ctrl *ProvisionController) processNextClaimWorkItem() bool {
 		}
 
 		if err := ctrl.syncClaimHandler(key); err != nil {
-			if ctrl.claimQueue.NumRequeues(obj) < ctrl.failedProvisionThreshold {
+			if ctrl.failedProvisionThreshold == 0 {
+				glog.Warningf("Retrying syncing claim %q, failure %v", key, ctrl.claimQueue.NumRequeues(obj))
+				ctrl.claimQueue.AddRateLimited(obj)
+			} else if ctrl.claimQueue.NumRequeues(obj) < ctrl.failedProvisionThreshold {
 				glog.Warningf("Retrying syncing claim %q because failures %v < threshold %v", key, ctrl.claimQueue.NumRequeues(obj), ctrl.failedProvisionThreshold)
 				ctrl.claimQueue.AddRateLimited(obj)
 			} else {
@@ -725,11 +728,14 @@ func (ctrl *ProvisionController) processNextVolumeWorkItem() bool {
 		}
 
 		if err := ctrl.syncVolumeHandler(key); err != nil {
-			if ctrl.volumeQueue.NumRequeues(obj) < ctrl.failedDeleteThreshold {
-				glog.Warningf("Retrying syncing volume %q because failures %v < threshold %v", key, ctrl.volumeQueue.NumRequeues(obj), ctrl.failedProvisionThreshold)
+			if ctrl.failedDeleteThreshold == 0 {
+				glog.Warningf("Retrying syncing volume %q, failure %v", key, ctrl.volumeQueue.NumRequeues(obj))
+				ctrl.volumeQueue.AddRateLimited(obj)
+			} else if ctrl.volumeQueue.NumRequeues(obj) < ctrl.failedDeleteThreshold {
+				glog.Warningf("Retrying syncing volume %q because failures %v < threshold %v", key, ctrl.volumeQueue.NumRequeues(obj), ctrl.failedDeleteThreshold)
 				ctrl.volumeQueue.AddRateLimited(obj)
 			} else {
-				glog.Errorf("Giving up syncing volume %q because failures %v >= threshold %v", key, ctrl.volumeQueue.NumRequeues(obj), ctrl.failedProvisionThreshold)
+				glog.Errorf("Giving up syncing volume %q because failures %v >= threshold %v", key, ctrl.volumeQueue.NumRequeues(obj), ctrl.failedDeleteThreshold)
 				// Done but do not Forget: it will not be in the queue but NumRequeues
 				// will be saved until the obj is deleted from kubernetes
 			}
