@@ -157,7 +157,7 @@ const (
 	// DefaultResyncPeriod is used when option function ResyncPeriod is omitted
 	DefaultResyncPeriod = 15 * time.Minute
 	// DefaultThreadiness is used when option function Threadiness is omitted
-	DefaultThreadiness = 4
+	DefaultThreadiness = 16
 	// DefaultExponentialBackOffOnError is used when option function ExponentialBackOffOnError is omitted
 	DefaultExponentialBackOffOnError = true
 	// DefaultCreateProvisionedPVRetryCount is used when option function CreateProvisionedPVRetryCount is omitted
@@ -201,7 +201,7 @@ func ResyncPeriod(resyncPeriod time.Duration) func(*ProvisionController) error {
 }
 
 // Threadiness is the number of claim and volume workers each to launch.
-// Defaults to 4.
+// Defaults to 16.
 func Threadiness(threadiness int) func(*ProvisionController) error {
 	return func(c *ProvisionController) error {
 		if c.HasRun() {
