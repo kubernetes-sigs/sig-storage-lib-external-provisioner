@@ -127,6 +127,7 @@ type ProvisionController struct {
 
 	resyncPeriod time.Duration
 
+	rateLimiter               workqueue.RateLimiter
 	exponentialBackOffOnError bool
 	threadiness               int
 
@@ -208,6 +209,18 @@ func Threadiness(threadiness int) func(*ProvisionController) error {
 			return errRuntime
 		}
 		c.threadiness = threadiness
+		return nil
+	}
+}
+
+// RateLimiter is the workqueue.RateLimiter to use for the provisioning and
+// deleting work queues. If set, ExponentialBackOffOnError is ignored.
+func RateLimiter(rateLimiter workqueue.RateLimiter) func(*ProvisionController) error {
+	return func(c *ProvisionController) error {
+		if c.HasRun() {
+			return errRuntime
+		}
+		c.rateLimiter = rateLimiter
 		return nil
 	}
 }
@@ -469,18 +482,23 @@ func NewProvisionController(
 		option(controller)
 	}
 
-	ratelimiter := workqueue.NewMaxOfRateLimiter(
-		workqueue.NewItemExponentialFailureRateLimiter(15*time.Second, 1000*time.Second),
-		&workqueue.BucketRateLimiter{Limiter: rate.NewLimiter(rate.Limit(10), 100)},
-	)
-	if !controller.exponentialBackOffOnError {
-		ratelimiter = workqueue.NewMaxOfRateLimiter(
+	var rateLimiter workqueue.RateLimiter
+	if controller.rateLimiter != nil {
+		// rateLimiter set via parameter takes precedence
+		rateLimiter = controller.rateLimiter
+	} else if controller.exponentialBackOffOnError {
+		rateLimiter = workqueue.NewMaxOfRateLimiter(
+			workqueue.NewItemExponentialFailureRateLimiter(15*time.Second, 1000*time.Second),
+			&workqueue.BucketRateLimiter{Limiter: rate.NewLimiter(rate.Limit(10), 100)},
+		)
+	} else {
+		rateLimiter = workqueue.NewMaxOfRateLimiter(
 			workqueue.NewItemExponentialFailureRateLimiter(15*time.Second, 15*time.Second),
 			&workqueue.BucketRateLimiter{Limiter: rate.NewLimiter(rate.Limit(10), 100)},
 		)
 	}
-	controller.claimQueue = workqueue.NewNamedRateLimitingQueue(ratelimiter, "claims")
-	controller.volumeQueue = workqueue.NewNamedRateLimitingQueue(ratelimiter, "volumes")
+	controller.claimQueue = workqueue.NewNamedRateLimitingQueue(rateLimiter, "claims")
+	controller.volumeQueue = workqueue.NewNamedRateLimitingQueue(rateLimiter, "volumes")
 
 	informer := informers.NewSharedInformerFactory(client, controller.resyncPeriod)
 
