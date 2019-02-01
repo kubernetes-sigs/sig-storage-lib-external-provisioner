@@ -104,8 +104,8 @@ type ProvisionController struct {
 	// * 1.6: storage classes enter GA
 	kubeVersion *utilversion.Version
 
-	claimInformer  cache.SharedInformer
-	claims         cache.Store
+	claimInformer  cache.SharedIndexInformer
+	claimsIndexer  cache.Indexer
 	volumeInformer cache.SharedInformer
 	volumes        cache.Store
 	classInformer  cache.SharedInformer
@@ -114,8 +114,9 @@ type ProvisionController struct {
 	// To determine if the informer is internal or external
 	customClaimInformer, customVolumeInformer, customClassInformer bool
 
-	claimQueue  workqueue.RateLimitingInterface
-	volumeQueue workqueue.RateLimitingInterface
+	claimQueue   workqueue.RateLimitingInterface
+	volumeQueue  workqueue.RateLimitingInterface
+	queuedClaims queuedClaimsMap
 
 	// Identity of this controller, generated at creation time and not persisted
 	// across restarts. Useful only for debugging, for seeing the source of
@@ -153,6 +154,79 @@ type ProvisionController struct {
 
 	hasRun     bool
 	hasRunLock *sync.Mutex
+}
+
+type queuedClaimsMap struct {
+	// queuedClaims is a map of claims that are in claimQueue or going to be
+	// added back to claimQueue to be retried
+	sync.Map
+}
+
+type queuedClaim struct {
+	claim     *v1.PersistentVolumeClaim
+	isDeleted bool
+	// maybe StorageClass
+}
+
+func (q *queuedClaimsMap) Add(claim *v1.PersistentVolumeClaim) error {
+	key, err := queueKeyFunc(claim)
+	if err != nil {
+		return err
+	}
+	q.Store(key, queuedClaim{claim, false})
+	return nil
+}
+
+func (q *queuedClaimsMap) Update(claim *v1.PersistentVolumeClaim, isDeleted bool) error {
+	key, err := queueKeyFunc(claim)
+	if err != nil {
+		return err
+	}
+	if _, ok := q.Load(key); ok {
+		q.Store(key, queuedClaim{claim, isDeleted})
+	} else {
+		return fmt.Errorf("claim %s not found in queuedClaimsMap", key)
+	}
+	return nil
+}
+
+// queueKeyFunc gets the key for an object in a queue. Includes the object UID
+// in addition to typical namespace/name because it's possible for 2 Provisions
+// to happen at the same time: e.g. PVC UID=A is deleted & recreated with UID=B,
+// and the Provisioner says that A must be retried until it succeeds so that it
+// can be cleaned up completely
+func queueKeyFunc(obj interface{}) (string, error) {
+	var object metav1.Object
+	var ok bool
+	if object, ok = obj.(metav1.Object); !ok {
+		tombstone, ok := obj.(cache.DeletedFinalStateUnknown)
+		if !ok {
+			return "", fmt.Errorf("error decoding object, invalid type")
+		}
+		object, ok = tombstone.Obj.(metav1.Object)
+		if !ok {
+			return "", fmt.Errorf("error decoding object tombstone, invalid type")
+		}
+	}
+	key, err := cache.MetaNamespaceKeyFunc(object)
+	if err != nil {
+		return "", err
+	}
+	key += "/" + string(object.GetUID())
+	return key, nil
+}
+
+func queueKeyToStoreKey(key string) (string, error) {
+	parts := strings.Split(key, "/")
+	switch len(parts) {
+	case 2:
+		// name only, no namespace
+		return parts[0], nil
+	case 3:
+		// namespace and name
+		return parts[0] + "/" + parts[1], nil
+	}
+	return "", fmt.Errorf("unexpected key format: %q", key)
 }
 
 const (
@@ -376,7 +450,7 @@ func RetryPeriod(retryPeriod time.Duration) func(*ProvisionController) error {
 
 // ClaimsInformer sets the informer to use for accessing PersistentVolumeClaims.
 // Defaults to using a internal informer.
-func ClaimsInformer(informer cache.SharedInformer) func(*ProvisionController) error {
+func ClaimsInformer(informer cache.SharedIndexInformer) func(*ProvisionController) error {
 	return func(c *ProvisionController) error {
 		if c.HasRun() {
 			return errRuntime
@@ -550,9 +624,18 @@ func NewProvisionController(
 	// PersistentVolumeClaims
 
 	claimHandler := cache.ResourceEventHandlerFuncs{
-		AddFunc:    func(obj interface{}) { controller.enqueueWork(controller.claimQueue, obj) },
-		UpdateFunc: func(oldObj, newObj interface{}) { controller.enqueueWork(controller.claimQueue, newObj) },
-		DeleteFunc: func(obj interface{}) { controller.forgetWork(controller.claimQueue, obj) },
+		AddFunc: func(obj interface{}) {
+			controller.queuedClaims.Add(obj.(*v1.PersistentVolumeClaim))
+			controller.enqueueWork(controller.claimQueue, obj)
+		},
+		UpdateFunc: func(oldObj, newObj interface{}) {
+			controller.queuedClaims.Add(newObj.(*v1.PersistentVolumeClaim))
+			controller.enqueueWork(controller.claimQueue, newObj)
+		},
+		DeleteFunc: func(obj interface{}) {
+			controller.queuedClaims.Update(obj.(*v1.PersistentVolumeClaim), true)
+			controller.forgetWork(controller.claimQueue, obj)
+		},
 	}
 
 	if controller.claimInformer != nil {
@@ -561,7 +644,15 @@ func NewProvisionController(
 		controller.claimInformer = informer.Core().V1().PersistentVolumeClaims().Informer()
 		controller.claimInformer.AddEventHandler(claimHandler)
 	}
-	controller.claims = controller.claimInformer.GetStore()
+	uidIndexFunc := func(obj interface{}) ([]string, error) {
+		key, err := queueKeyFunc(obj)
+		if err != nil {
+			return nil, err
+		}
+		return []string{string(key)}, nil
+	}
+	controller.claimInformer.AddIndexers(cache.Indexers{"namespace/name/uid": uidIndexFunc})
+	controller.claimsIndexer = controller.claimInformer.GetIndexer()
 
 	// -----------------
 	// PersistentVolumes
@@ -599,9 +690,8 @@ func NewProvisionController(
 // enqueueWork takes an obj and converts it into a namespace/name string which
 // is then put onto the given work queue.
 func (ctrl *ProvisionController) enqueueWork(queue workqueue.RateLimitingInterface, obj interface{}) {
-	var key string
-	var err error
-	if key, err = cache.DeletionHandlingMetaNamespaceKeyFunc(obj); err != nil {
+	key, err := queueKeyFunc(obj)
+	if err != nil {
 		utilruntime.HandleError(err)
 		return
 	}
@@ -615,9 +705,8 @@ func (ctrl *ProvisionController) enqueueWork(queue workqueue.RateLimitingInterfa
 // forgetWork Forgets an obj from the given work queue, telling the queue to
 // stop tracking its retries because e.g. the obj was deleted
 func (ctrl *ProvisionController) forgetWork(queue workqueue.RateLimitingInterface, obj interface{}) {
-	var key string
-	var err error
-	if key, err = cache.DeletionHandlingMetaNamespaceKeyFunc(obj); err != nil {
+	key, err := queueKeyFunc(obj)
+	if err != nil {
 		utilruntime.HandleError(err)
 		return
 	}
@@ -741,6 +830,7 @@ func (ctrl *ProvisionController) processNextClaimWorkItem() bool {
 		var key string
 		var ok bool
 		if key, ok = obj.(string); !ok {
+			ctrl.queuedClaims.Delete(key)
 			ctrl.claimQueue.Forget(obj)
 			return fmt.Errorf("expected string in workqueue but got %#v", obj)
 		}
@@ -760,6 +850,13 @@ func (ctrl *ProvisionController) processNextClaimWorkItem() bool {
 			return fmt.Errorf("error syncing claim %q: %s", key, err.Error())
 		}
 
+		if value, ok := ctrl.queuedClaims.Load(key); ok {
+			if value.(queuedClaim).isDeleted {
+				// TODO PVC gone, PV succeeded but unwanted. Delete PV.
+			}
+		}
+
+		ctrl.queuedClaims.Delete(key)
 		ctrl.claimQueue.Forget(obj)
 		return nil
 	}(obj)
@@ -818,13 +915,23 @@ func (ctrl *ProvisionController) processNextVolumeWorkItem() bool {
 
 // syncClaimHandler gets the claim from informer's cache then calls syncClaim
 func (ctrl *ProvisionController) syncClaimHandler(key string) error {
-	claimObj, exists, err := ctrl.claims.GetByKey(key)
+	var claimObj interface{}
+	objs, err := ctrl.claimsIndexer.ByIndex("namespace/name/uid", key)
 	if err != nil {
 		return err
 	}
-	if !exists {
-		utilruntime.HandleError(fmt.Errorf("claim %q in work queue no longer exists", key))
+	if len(objs) == 0 {
+		if _, ok := ctrl.queuedClaims.Load(key); !ok {
+			utilruntime.HandleError(fmt.Errorf("claim %q in work queue no longer exists", key))
+			return nil
+		}
+		value, _ := ctrl.queuedClaims.Load(key)
+		claimObj = value.(queuedClaim).claim
+	} else if len(objs) != 1 {
+		utilruntime.HandleError(fmt.Errorf("more than one instance of claim %q in work queue", key))
 		return nil
+	} else {
+		claimObj = objs[0]
 	}
 
 	return ctrl.syncClaim(claimObj)
@@ -832,7 +939,11 @@ func (ctrl *ProvisionController) syncClaimHandler(key string) error {
 
 // syncVolumeHandler gets the volume from informer's cache then calls syncVolume
 func (ctrl *ProvisionController) syncVolumeHandler(key string) error {
-	volumeObj, exists, err := ctrl.volumes.GetByKey(key)
+	storeKey, err := queueKeyToStoreKey(key)
+	if err != nil {
+		return err
+	}
+	volumeObj, exists, err := ctrl.volumes.GetByKey(storeKey)
 	if err != nil {
 		return err
 	}
@@ -1097,16 +1208,39 @@ func (ctrl *ProvisionController) provisionClaimOperation(claim *v1.PersistentVol
 
 	ctrl.eventRecorder.Event(claim, v1.EventTypeNormal, "Provisioning", fmt.Sprintf("External provisioner is provisioning volume for claim %q", claimToClaimKey(claim)))
 
-	volume, err = ctrl.provisioner.Provision(options)
-	if err != nil {
-		if ierr, ok := err.(*IgnoredError); ok {
-			// Provision ignored, do nothing and hope another provisioner will provision it.
-			glog.Info(logOperation(operation, "volume provision ignored: %v", ierr))
-			return nil
+	var shouldRetry bool
+	if p, ok := ctrl.provisioner.(RetryProvisioner); ok {
+		volume, err, shouldRetry = p.RetryProvision(options)
+		if err != nil {
+			if ierr, ok := err.(*IgnoredError); ok {
+				// Provision ignored, do nothing and hope another provisioner will provision it.
+				glog.Info(logOperation(operation, "volume provision ignored: %v", ierr))
+				return nil
+			}
+			if shouldRetry {
+				// The error is transient, retry.
+				err = fmt.Errorf("failed to provision volume with StorageClass %q, will retry: %v", claimClass, err)
+				ctrl.eventRecorder.Event(claim, v1.EventTypeWarning, "ProvisioningFailed", err.Error())
+				return err
+			} else {
+				// The error is final, do nothing and don't retry.
+				err = fmt.Errorf("failed to provision volume with StorageClass %q, won't retry: %v", claimClass, err)
+				ctrl.eventRecorder.Event(claim, v1.EventTypeWarning, "ProvisioningFailed", err.Error())
+				return nil
+			}
 		}
-		err = fmt.Errorf("failed to provision volume with StorageClass %q: %v", claimClass, err)
-		ctrl.eventRecorder.Event(claim, v1.EventTypeWarning, "ProvisioningFailed", err.Error())
-		return err
+	} else {
+		volume, err = ctrl.provisioner.Provision(options)
+		if err != nil {
+			if ierr, ok := err.(*IgnoredError); ok {
+				// Provision ignored, do nothing and hope another provisioner will provision it.
+				glog.Info(logOperation(operation, "volume provision ignored: %v", ierr))
+				return nil
+			}
+			err = fmt.Errorf("failed to provision volume with StorageClass %q, will retry: %v", claimClass, err)
+			ctrl.eventRecorder.Event(claim, v1.EventTypeWarning, "ProvisioningFailed", err.Error())
+			return err
+		}
 	}
 
 	glog.Info(logOperation(operation, "volume %q provisioned", volume.Name))

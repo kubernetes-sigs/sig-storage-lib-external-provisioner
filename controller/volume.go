@@ -38,6 +38,11 @@ type Provisioner interface {
 	Delete(*v1.PersistentVolume) error
 }
 
+// RetryProvisioner is like Provisioner but...
+type RetryProvisioner interface {
+	RetryProvision(VolumeOptions) (*v1.PersistentVolume, error, bool)
+}
+
 // Qualifier is an optional interface implemented by provisioners to determine
 // whether a claim should be provisioned as early as possible (e.g. prior to
 // leader election).
