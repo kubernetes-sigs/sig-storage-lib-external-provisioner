@@ -17,6 +17,7 @@ limitations under the License.
 package util
 
 import (
+	glog "k8s.io/klog"
 	"github.com/golang/glog"
 	"github.com/miekg/dns"
 	"k8s.io/api/core/v1"
