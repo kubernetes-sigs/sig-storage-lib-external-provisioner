@@ -29,7 +29,6 @@ import (
 	"time"
 
 	glog "k8s.io/klog"
-	
 	"github.com/kubernetes-sigs/sig-storage-lib-external-provisioner/controller/metrics"
 	"github.com/kubernetes-sigs/sig-storage-lib-external-provisioner/util"
 	"github.com/prometheus/client_golang/prometheus"
