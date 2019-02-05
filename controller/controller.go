@@ -692,6 +692,7 @@ func (ctrl *ProvisionController) Run(_ <-chan struct{}) {
 			ctrl.leaderElectionNamespace,
 			strings.Replace(ctrl.provisionerName, "/", "-", -1),
 			ctrl.client.CoreV1(),
+			nil,
 			resourcelock.ResourceLockConfig{
 				Identity:      ctrl.id,
 				EventRecorder: ctrl.eventRecorder,
