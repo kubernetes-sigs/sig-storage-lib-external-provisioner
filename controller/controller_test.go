@@ -39,6 +39,7 @@ import (
 	testclient "k8s.io/client-go/testing"
 	"k8s.io/client-go/tools/cache"
 	ref "k8s.io/client-go/tools/reference"
+	csitranslationlib "k8s.io/csi-translation-lib"
 )
 
 const (
@@ -198,7 +199,20 @@ func TestController(t *testing.T) {
 			provisioner:     newTestProvisioner(),
 			serverVersion:   "v1.8.0",
 			expectedVolumes: []v1.PersistentVolume{
-				*newProvisionedVolumeWithSpecifiedReclaimPolicy(newStorageClassWithSpecifiedReclaimPolicy("class-1", "foo.bar/baz", v1.PersistentVolumeReclaimRetain), newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil)),
+				*newProvisionedVolumeWithSpecifiedReclaimPolicy(newStorageClassWithSpecifiedReclaimPolicy("class-1", "foo.bar/baz", v1.PersistentVolumeReclaimRetain), newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil), false, false),
+			},
+		},
+		{
+			name: "provision for claim-1 with a provisioner based on annStorageProvisioner that is different from provisioner specified in the storage class (CSI migration scenario)",
+			objs: []runtime.Object{
+				newStorageClassWithSpecifiedReclaimPolicy("class-1", "kubernetes.io/gce-pd", v1.PersistentVolumeReclaimRetain),
+				newClaim("claim-1", "uid-1-1", "class-1", "kubernetes.io/gce-pd", "", map[string]string{annStorageProvisioner: "pd.csi.storage.gke.io"}),
+			},
+			provisionerName: "pd.csi.storage.gke.io",
+			serverVersion:   "v1.12.0",
+			provisioner:     newTestCSIProvisioner(),
+			expectedVolumes: []v1.PersistentVolume{
+				*newProvisionedVolumeWithSpecifiedReclaimPolicy(newStorageClassWithSpecifiedReclaimPolicy("class-1", "pd.csi.storage.gke.io", v1.PersistentVolumeReclaimRetain), newClaim("claim-1", "uid-1-1", "class-1", "kubernetes.io/gce-pd", "", nil), true, true),
 			},
 		},
 	}
@@ -652,7 +666,7 @@ func TestControllerSharedInformers(t *testing.T) {
 			provisionerName: "foo.bar/baz",
 			serverVersion:   "v1.8.0",
 			expectedVolumes: []v1.PersistentVolume{
-				*newProvisionedVolumeWithSpecifiedReclaimPolicy(newStorageClassWithSpecifiedReclaimPolicy("class-1", "foo.bar/baz", v1.PersistentVolumeReclaimDelete), newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil)),
+				*newProvisionedVolumeWithSpecifiedReclaimPolicy(newStorageClassWithSpecifiedReclaimPolicy("class-1", "foo.bar/baz", v1.PersistentVolumeReclaimDelete), newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil), false, false),
 			},
 		},
 		{
@@ -874,7 +888,7 @@ func newVolume(name string, phase v1.PersistentVolumePhase, policy v1.Persistent
 // given claim with the given class.
 // For Kubernetes version before v1.6.0.
 func newProvisionedVolume(storageClass *storagebeta.StorageClass, claim *v1.PersistentVolumeClaim) *v1.PersistentVolume {
-	volume := constructProvisionedVolumeWithoutStorageClassInfo(claim, v1.PersistentVolumeReclaimDelete)
+	volume := constructProvisionedVolumeWithoutStorageClassInfo(claim, v1.PersistentVolumeReclaimDelete, false, false)
 
 	// pv.Annotations["pv.kubernetes.io/provisioned-by"] MUST be set to name of the external provisioner. This provisioner will be used to delete the volume.
 	// pv.Annotations["volume.beta.kubernetes.io/storage-class"] MUST be set to name of the storage class requested by the claim.
@@ -887,8 +901,8 @@ func newProvisionedVolume(storageClass *storagebeta.StorageClass, claim *v1.Pers
 // given claim with the given class.
 // For Kubernetes version since v1.6.0.
 // Once we have tests for v1.6.0, we can add a new function for v1.8.0 newProvisionedVolume since reclaim policy can only be specified since v1.8.0.
-func newProvisionedVolumeWithSpecifiedReclaimPolicy(storageClass *storage.StorageClass, claim *v1.PersistentVolumeClaim) *v1.PersistentVolume {
-	volume := constructProvisionedVolumeWithoutStorageClassInfo(claim, *storageClass.ReclaimPolicy)
+func newProvisionedVolumeWithSpecifiedReclaimPolicy(storageClass *storage.StorageClass, claim *v1.PersistentVolumeClaim, useCSIProvisioner bool, translateCSIToIntree bool) *v1.PersistentVolume {
+	volume := constructProvisionedVolumeWithoutStorageClassInfo(claim, *storageClass.ReclaimPolicy, useCSIProvisioner, translateCSIToIntree)
 
 	// pv.Annotations["pv.kubernetes.io/provisioned-by"] MUST be set to name of the external provisioner. This provisioner will be used to delete the volume.
 	volume.Annotations = map[string]string{annDynamicallyProvisioned: storageClass.Provisioner}
@@ -898,14 +912,23 @@ func newProvisionedVolumeWithSpecifiedReclaimPolicy(storageClass *storage.Storag
 	return volume
 }
 
-func constructProvisionedVolumeWithoutStorageClassInfo(claim *v1.PersistentVolumeClaim, reclaimPolicy v1.PersistentVolumeReclaimPolicy) *v1.PersistentVolume {
+func constructProvisionedVolumeWithoutStorageClassInfo(claim *v1.PersistentVolumeClaim, reclaimPolicy v1.PersistentVolumeReclaimPolicy, useCSIProvisioner bool, translateCSIToIntree bool) *v1.PersistentVolume {
 	// pv.Spec MUST be set to match requirements in claim.Spec, especially access mode and PV size. The provisioned volume size MUST NOT be smaller than size requested in the claim, however it MAY be larger.
 	options := VolumeOptions{
 		PersistentVolumeReclaimPolicy: reclaimPolicy,
-		PVName:                        "pvc-" + string(claim.ObjectMeta.UID),
-		PVC:                           claim,
+		PVName: "pvc-" + string(claim.ObjectMeta.UID),
+		PVC:    claim,
 	}
-	volume, _ := newTestProvisioner().Provision(options)
+
+	var volume *v1.PersistentVolume
+	if useCSIProvisioner {
+		volume, _ = newTestCSIProvisioner().Provision(options)
+		if translateCSIToIntree {
+			volume, _ = csitranslationlib.TranslateCSIPVToInTree(volume)
+		}
+	} else {
+		volume, _ = newTestProvisioner().Provision(options)
+	}
 
 	// pv.Spec.ClaimRef MUST point to the claim that led to its creation (including the claim UID).
 	v1.AddToScheme(scheme.Scheme)
@@ -941,6 +964,55 @@ type testProvisioner struct {
 }
 
 var _ Provisioner = &testProvisioner{}
+
+func newTestCSIProvisioner() *testCSIProvisioner {
+	return &testCSIProvisioner{make(chan provisionParams, 16)}
+}
+
+type testCSIProvisioner struct {
+	provisionCalls chan provisionParams
+}
+
+var _ Provisioner = &testCSIProvisioner{}
+
+func (p *testCSIProvisioner) Provision(options VolumeOptions) (*v1.PersistentVolume, error) {
+	p.provisionCalls <- provisionParams{
+		selectedNode:      options.SelectedNode,
+		allowedTopologies: options.AllowedTopologies,
+	}
+
+	// Sleep to simulate work done by Provision...for long enough that
+	// TestMultipleControllers will consistently fail with lock disabled. If
+	// Provision happens too fast, the first controller creates the PV too soon
+	// and the next controllers won't call Provision even though they're clearly
+	// racing when there's no lock
+	time.Sleep(50 * time.Millisecond)
+
+	pv := &v1.PersistentVolume{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: options.PVName,
+		},
+		Spec: v1.PersistentVolumeSpec{
+			PersistentVolumeReclaimPolicy: options.PersistentVolumeReclaimPolicy,
+			AccessModes:                   options.PVC.Spec.AccessModes,
+			Capacity: v1.ResourceList{
+				v1.ResourceName(v1.ResourceStorage): options.PVC.Spec.Resources.Requests[v1.ResourceName(v1.ResourceStorage)],
+			},
+			PersistentVolumeSource: v1.PersistentVolumeSource{
+				CSI: &v1.CSIPersistentVolumeSource{
+					Driver:       "pd.csi.storage.gke.io",
+					VolumeHandle: "projects/k8project/zones/test-zone/disks/testdisk",
+					ReadOnly:     false,
+				},
+			},
+		},
+	}
+	return pv, nil
+}
+
+func (p *testCSIProvisioner) Delete(volume *v1.PersistentVolume) error {
+	return nil
+}
 
 func newTestQualifiedProvisioner(answer bool) *testQualifiedProvisioner {
 	return &testQualifiedProvisioner{newTestProvisioner(), answer}

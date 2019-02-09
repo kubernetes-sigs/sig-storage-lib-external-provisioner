@@ -53,6 +53,10 @@
   branch = "master"
   name = "k8s.io/client-go"
 
+[[constraint]]
+  branch = "master"
+  name = "k8s.io/csi-translation-lib"
+
 [prune]
   go-tests = true
   unused-packages = true

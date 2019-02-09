@@ -52,6 +52,7 @@ import (
 	"k8s.io/client-go/tools/record"
 	ref "k8s.io/client-go/tools/reference"
 	"k8s.io/client-go/util/workqueue"
+	csitranslationlib "k8s.io/csi-translation-lib"
 	glog "k8s.io/klog"
 )
 
@@ -902,7 +903,7 @@ func (ctrl *ProvisionController) shouldProvision(claim *v1.PersistentVolumeClaim
 	} else {
 		// Kubernetes 1.4 provisioning, evaluating class.Provisioner
 		claimClass := util.GetPersistentVolumeClaimClass(claim)
-		provisioner, _, err := ctrl.getStorageClassFields(claimClass)
+		provisioner, _, _, err := ctrl.getStorageClassFields(claimClass)
 		if err != nil {
 			glog.Errorf("Error getting claim %q's StorageClass's fields: %v", claimToClaimKey(claim), err)
 			return false
@@ -1031,7 +1032,7 @@ func (ctrl *ProvisionController) provisionClaimOperation(claim *v1.PersistentVol
 		return nil
 	}
 
-	provisioner, parameters, err := ctrl.getStorageClassFields(claimClass)
+	provisioner, parameters, translatePVToIntree, err := ctrl.getStorageClassFields(claimClass)
 	if err != nil {
 		glog.Error(logOperation(operation, "error getting claim's StorageClass's fields: %v", err))
 		return nil
@@ -1088,12 +1089,12 @@ func (ctrl *ProvisionController) provisionClaimOperation(claim *v1.PersistentVol
 
 	options := VolumeOptions{
 		PersistentVolumeReclaimPolicy: reclaimPolicy,
-		PVName:                        pvName,
-		PVC:                           claim,
-		MountOptions:                  mountOptions,
-		Parameters:                    parameters,
-		SelectedNode:                  selectedNode,
-		AllowedTopologies:             allowedTopologies,
+		PVName:            pvName,
+		PVC:               claim,
+		MountOptions:      mountOptions,
+		Parameters:        parameters,
+		SelectedNode:      selectedNode,
+		AllowedTopologies: allowedTopologies,
 	}
 
 	ctrl.eventRecorder.Event(claim, v1.EventTypeNormal, "Provisioning", fmt.Sprintf("External provisioner is provisioning volume for claim %q", claimToClaimKey(claim)))
@@ -1110,6 +1111,15 @@ func (ctrl *ProvisionController) provisionClaimOperation(claim *v1.PersistentVol
 		return err
 	}
 
+	if translatePVToIntree {
+		volume, err = csitranslationlib.TranslateCSIPVToInTree(volume)
+		if err != nil {
+			err = fmt.Errorf("failed to translate volume provisioned by CSI plugin to in-tree source: %v", err)
+			ctrl.eventRecorder.Event(claim, v1.EventTypeWarning, "ProvisioningFailed", err.Error())
+			return err
+		}
+	}
+
 	glog.Info(logOperation(operation, "volume %q provisioned", volume.Name))
 
 	// Set ClaimRef and the PV controller will bind and set annBoundByController for us
@@ -1120,6 +1130,8 @@ func (ctrl *ProvisionController) provisionClaimOperation(claim *v1.PersistentVol
 		volume.ObjectMeta.Finalizers = append(volume.ObjectMeta.Finalizers, finalizerPV)
 	}
 
+	// We want annDynamicallyProvisioned to point to current provisioner. For CSI migration,
+	// this will cause the delete operations to be delegated to the CSI plugin rather than in-tree code
 	metav1.SetMetaDataAnnotation(&volume.ObjectMeta, annDynamicallyProvisioned, ctrl.provisionerName)
 	if ctrl.kubeVersion.AtLeast(utilversion.MustParseSemantic("v1.6.0")) {
 		volume.Spec.StorageClassName = claimClass
@@ -1292,13 +1304,13 @@ func (ctrl *ProvisionController) getProvisionedVolumeNameForClaim(claim *v1.Pers
 	return "pvc-" + string(claim.UID)
 }
 
-func (ctrl *ProvisionController) getStorageClassFields(name string) (string, map[string]string, error) {
+func (ctrl *ProvisionController) getStorageClassFields(name string) (string, map[string]string, bool, error) {
 	classObj, found, err := ctrl.classes.GetByKey(name)
 	if err != nil {
-		return "", nil, err
+		return "", nil, false, err
 	}
 	if !found {
-		return "", nil, fmt.Errorf("storageClass %q not found", name)
+		return "", nil, false, fmt.Errorf("storageClass %q not found", name)
 		// 3. It tries to find a StorageClass instance referenced by annotation
 		//    `claim.Annotations["volume.beta.kubernetes.io/storage-class"]`. If not
 		//    found, it SHOULD report an error (by sending an event to the claim) and it
@@ -1306,11 +1318,27 @@ func (ctrl *ProvisionController) getStorageClassFields(name string) (string, map
 	}
 	switch class := classObj.(type) {
 	case *storage.StorageClass:
-		return class.Provisioner, class.Parameters, nil
+		if csitranslationlib.IsMigratableByName(class.Provisioner) {
+			// we found a reference to an in-tree plugin in external provisioner
+			// this indicates CSI translations needs to happen as otherwise in-tree
+			// provisioners would have processed this and not left the claim for external provisioner
+			csiProvisioner, err := csitranslationlib.GetCSINameFromIntreeName(class.Provisioner)
+			if err != nil {
+				return "", nil, false, err
+			}
+			csiParameters, err := csitranslationlib.TranslateInTreeStorageClassParametersToCSI(class.Provisioner, class.Parameters)
+			if err != nil {
+				return "", nil, false, err
+			}
+			// return CSI provisioner for migration scenarios
+			// but class.provisioner will keep pointing to in-tree
+			return csiProvisioner, csiParameters, true, nil
+		}
+		return class.Provisioner, class.Parameters, false, nil
 	case *storagebeta.StorageClass:
-		return class.Provisioner, class.Parameters, nil
+		return class.Provisioner, class.Parameters, false, nil
 	}
-	return "", nil, fmt.Errorf("cannot convert object to StorageClass: %+v", classObj)
+	return "", nil, false, fmt.Errorf("cannot convert object to StorageClass: %+v", classObj)
 }
 
 func claimToClaimKey(claim *v1.PersistentVolumeClaim) string {
