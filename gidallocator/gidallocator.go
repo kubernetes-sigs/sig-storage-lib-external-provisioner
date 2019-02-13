@@ -23,13 +23,13 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/kubernetes-sigs/sig-storage-lib-external-provisioner/allocator"
-	"github.com/kubernetes-sigs/sig-storage-lib-external-provisioner/controller"
-	"github.com/kubernetes-sigs/sig-storage-lib-external-provisioner/util"
 	"k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	glog "k8s.io/klog"
+	"sigs.k8s.io/sig-storage-lib-external-provisioner/allocator"
+	"sigs.k8s.io/sig-storage-lib-external-provisioner/controller"
+	"sigs.k8s.io/sig-storage-lib-external-provisioner/util"
 )
 
 const (
