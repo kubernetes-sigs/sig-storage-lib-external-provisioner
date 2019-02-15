@@ -28,8 +28,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/kubernetes-sigs/sig-storage-lib-external-provisioner/controller/metrics"
-	"github.com/kubernetes-sigs/sig-storage-lib-external-provisioner/util"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"golang.org/x/time/rate"
@@ -53,6 +51,8 @@ import (
 	ref "k8s.io/client-go/tools/reference"
 	"k8s.io/client-go/util/workqueue"
 	glog "k8s.io/klog"
+	"sigs.k8s.io/sig-storage-lib-external-provisioner/controller/metrics"
+	"sigs.k8s.io/sig-storage-lib-external-provisioner/util"
 )
 
 // annClass annotation represents the storage class associated with a resource:

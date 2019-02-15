@@ -24,7 +24,7 @@ import (
 	"syscall"
 
 	"github.com/golang/glog"
-	"github.com/kubernetes-sigs/sig-storage-lib-external-provisioner/controller"
+	"sigs.k8s.io/sig-storage-lib-external-provisioner/controller"
 
 	"k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"

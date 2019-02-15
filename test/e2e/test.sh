@@ -17,7 +17,7 @@
 set -x
 PS4='+\t '
 
-pushd $GOPATH/src/github.com/kubernetes-sigs/sig-storage-lib-external-provisioner/test/e2e
+pushd $GOPATH/src/sigs.k8s.io/sig-storage-lib-external-provisioner/test/e2e
 if [ ! -f dind-cluster-v1.13.sh ]; then
   wget https://github.com/kubernetes-sigs/kubeadm-dind-cluster/releases/download/v0.1.0/dind-cluster-v1.13.sh
   chmod +x dind-cluster-v1.13.sh
@@ -26,7 +26,7 @@ fi
 
 export PATH="$HOME/.kubeadm-dind-cluster:$PATH"
 
-pushd $GOPATH/src/github.com/kubernetes-sigs/sig-storage-lib-external-provisioner/examples/hostpath-provisioner
+pushd $GOPATH/src/sigs.k8s.io/sig-storage-lib-external-provisioner/examples/hostpath-provisioner
 make image
 docker save hostpath-provisioner | docker exec -i kube-node-1 docker load
 docker save hostpath-provisioner | docker exec -i kube-node-2 docker load
