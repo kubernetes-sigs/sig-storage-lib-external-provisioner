@@ -155,6 +155,9 @@ type ProvisionController struct {
 
 	hasRun     bool
 	hasRunLock *sync.Mutex
+
+	// Map UID -> *PVC with all claims that may be provisioned in the background.
+	claimsInProgress sync.Map
 }
 
 const (
@@ -554,7 +557,10 @@ func NewProvisionController(
 	claimHandler := cache.ResourceEventHandlerFuncs{
 		AddFunc:    func(obj interface{}) { controller.enqueueClaim(obj) },
 		UpdateFunc: func(oldObj, newObj interface{}) { controller.enqueueClaim(newObj) },
-		DeleteFunc: func(obj interface{}) { controller.enqueueClaim(obj) },
+		DeleteFunc: func(obj interface{}) {
+			// NOOP. The claim is either in claimsInProgress and in the queue, so it will be processed as usual
+			// or it's not in claimsInProgress and then we don't care
+		},
 	}
 
 	if controller.claimInformer != nil {
@@ -792,6 +798,8 @@ func (ctrl *ProvisionController) processNextClaimWorkItem() bool {
 				ctrl.claimQueue.AddRateLimited(obj)
 			} else {
 				glog.Errorf("Giving up syncing claim %q because failures %v >= threshold %v", key, ctrl.claimQueue.NumRequeues(obj), ctrl.failedProvisionThreshold)
+				glog.V(2).Infof("Removing PVC %s from claims in progress", key)
+				ctrl.claimsInProgress.Delete(key) // This can leak a volume that's being provisioned in the background!
 				// Done but do not Forget: it will not be in the queue but NumRequeues
 				// will be saved until the obj is deleted from kubernetes
 			}
@@ -799,6 +807,8 @@ func (ctrl *ProvisionController) processNextClaimWorkItem() bool {
 		}
 
 		ctrl.claimQueue.Forget(obj)
+		glog.V(2).Infof("Provisioning succeeded, removing PVC %s from claims in progress", key)
+		ctrl.claimsInProgress.Delete(key)
 		return nil
 	}(obj)
 
@@ -860,13 +870,35 @@ func (ctrl *ProvisionController) syncClaimHandler(key string) (ProvisioningState
 	if err != nil {
 		return ProvisioningFinished, err
 	}
-	if len(objs) == 0 {
-		// TODO: handle deleted PVCs
-		utilruntime.HandleError(fmt.Errorf("claim %q in work queue no longer exists", key))
-		return ProvisioningFinished, nil
+	var claimObj interface{}
+	if len(objs) > 0 {
+		claimObj = objs[0]
+	} else {
+		obj, found := ctrl.claimsInProgress.Load(key)
+		if !found {
+			utilruntime.HandleError(fmt.Errorf("claim %q in work queue no longer exists", key))
+			return ProvisioningFinished, nil
+		}
+		claimObj = obj
 	}
-	claimObj := objs[0]
-	return ctrl.syncClaim(claimObj)
+	status, err := ctrl.syncClaim(claimObj)
+	if err == nil || status == ProvisioningFinished {
+		// Provisioning is 100% finished / not in progress.
+		glog.V(2).Infof("Final error received, removing PVC %s from claims in progress", key)
+		ctrl.claimsInProgress.Delete(key)
+		return status, err
+	}
+	if status == ProvisioningInBackground {
+		// Provisioning is in progress in background.
+		glog.V(2).Infof("Temporary error received, adding PVC %s to claims in progress", key)
+		ctrl.claimsInProgress.Store(key, claimObj)
+	} else {
+		// status == ProvisioningNoChange.
+		// Don't change claimsInProgress:
+		// - the claim is already there if previous status was ProvisioningInBackground.
+		// - the claim is not there if if previous status was ProvisioningFinished.
+	}
+	return status, err
 }
 
 // syncVolumeHandler gets the volume from informer's cache then calls syncVolume
