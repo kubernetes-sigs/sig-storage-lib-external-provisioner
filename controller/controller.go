@@ -783,7 +783,7 @@ func (ctrl *ProvisionController) processNextClaimWorkItem() bool {
 			return fmt.Errorf("expected string in workqueue but got %#v", obj)
 		}
 
-		if err := ctrl.syncClaimHandler(key); err != nil {
+		if _, err := ctrl.syncClaimHandler(key); err != nil {
 			if ctrl.failedProvisionThreshold == 0 {
 				glog.Warningf("Retrying syncing claim %q, failure %v", key, ctrl.claimQueue.NumRequeues(obj))
 				ctrl.claimQueue.AddRateLimited(obj)
@@ -855,15 +855,15 @@ func (ctrl *ProvisionController) processNextVolumeWorkItem() bool {
 }
 
 // syncClaimHandler gets the claim from informer's cache then calls syncClaim
-func (ctrl *ProvisionController) syncClaimHandler(key string) error {
+func (ctrl *ProvisionController) syncClaimHandler(key string) (ProvisioningState, error) {
 	objs, err := ctrl.claimsIndexer.ByIndex(uidIndex, key)
 	if err != nil {
-		return err
+		return ProvisioningFinished, err
 	}
 	if len(objs) == 0 {
 		// TODO: handle deleted PVCs
 		utilruntime.HandleError(fmt.Errorf("claim %q in work queue no longer exists", key))
-		return nil
+		return ProvisioningFinished, nil
 	}
 	claimObj := objs[0]
 	return ctrl.syncClaim(claimObj)
@@ -885,19 +885,19 @@ func (ctrl *ProvisionController) syncVolumeHandler(key string) error {
 
 // syncClaim checks if the claim should have a volume provisioned for it and
 // provisions one if so.
-func (ctrl *ProvisionController) syncClaim(obj interface{}) error {
+func (ctrl *ProvisionController) syncClaim(obj interface{}) (ProvisioningState, error) {
 	claim, ok := obj.(*v1.PersistentVolumeClaim)
 	if !ok {
-		return fmt.Errorf("expected claim but got %+v", obj)
+		return ProvisioningFinished, fmt.Errorf("expected claim but got %+v", obj)
 	}
 
 	if ctrl.shouldProvision(claim) {
 		startTime := time.Now()
-		err := ctrl.provisionClaimOperation(claim)
+		status, err := ctrl.provisionClaimOperation(claim)
 		ctrl.updateProvisionStats(claim, err, startTime)
-		return err
+		return status, err
 	}
-	return nil
+	return ProvisioningFinished, nil
 }
 
 // syncVolume checks if the volume should be deleted and deletes if so
@@ -1044,7 +1044,7 @@ func (ctrl *ProvisionController) updateDeleteStats(volume *v1.PersistentVolume, 
 // provisionClaimOperation attempts to provision a volume for the given claim.
 // Returns error, which indicates whether provisioning should be retried
 // (requeue the claim) or not
-func (ctrl *ProvisionController) provisionClaimOperation(claim *v1.PersistentVolumeClaim) error {
+func (ctrl *ProvisionController) provisionClaimOperation(claim *v1.PersistentVolumeClaim) (ProvisioningState, error) {
 	// Most code here is identical to that found in controller.go of kube's PV controller...
 	claimClass := util.GetPersistentVolumeClaimClass(claim)
 	operation := fmt.Sprintf("provision %q class %q", claimToClaimKey(claim), claimClass)
@@ -1058,7 +1058,7 @@ func (ctrl *ProvisionController) provisionClaimOperation(claim *v1.PersistentVol
 	if err == nil && volume != nil {
 		// Volume has been already provisioned, nothing to do.
 		glog.Info(logOperation(operation, "persistentvolume %q already exists, skipping", pvName))
-		return nil
+		return ProvisioningFinished, nil
 	}
 
 	// Prepare a claimRef to the claim early (to fail before a volume is
@@ -1066,40 +1066,40 @@ func (ctrl *ProvisionController) provisionClaimOperation(claim *v1.PersistentVol
 	claimRef, err := ref.GetReference(scheme.Scheme, claim)
 	if err != nil {
 		glog.Error(logOperation(operation, "unexpected error getting claim reference: %v", err))
-		return nil
+		return ProvisioningNoChange, nil
 	}
 
 	provisioner, parameters, err := ctrl.getStorageClassFields(claimClass)
 	if err != nil {
 		glog.Error(logOperation(operation, "error getting claim's StorageClass's fields: %v", err))
-		return nil
+		return ProvisioningFinished, nil
 	}
 	if provisioner != ctrl.provisionerName {
 		// class.Provisioner has either changed since shouldProvision() or
 		// annDynamicallyProvisioned contains different provisioner than
 		// class.Provisioner.
 		glog.Error(logOperation(operation, "unknown provisioner %q requested in claim's StorageClass", provisioner))
-		return nil
+		return ProvisioningFinished, nil
 	}
 
 	// Check if this provisioner can provision this claim.
 	if err = ctrl.canProvision(claim); err != nil {
 		ctrl.eventRecorder.Event(claim, v1.EventTypeWarning, "ProvisioningFailed", err.Error())
 		glog.Error(logOperation(operation, "failed to provision volume: %v", err))
-		return nil
+		return ProvisioningFinished, nil
 	}
 
 	reclaimPolicy := v1.PersistentVolumeReclaimDelete
 	if ctrl.kubeVersion.AtLeast(utilversion.MustParseSemantic("v1.8.0")) {
 		reclaimPolicy, err = ctrl.fetchReclaimPolicy(claimClass)
 		if err != nil {
-			return err
+			return ProvisioningFinished, err
 		}
 	}
 
 	mountOptions, err := ctrl.fetchMountOptions(claimClass)
 	if err != nil {
-		return err
+		return ProvisioningFinished, err
 	}
 
 	var selectedNode *v1.Node
@@ -1111,7 +1111,7 @@ func (ctrl *ProvisionController) provisionClaimOperation(claim *v1.PersistentVol
 			if err != nil {
 				err = fmt.Errorf("failed to get target node: %v", err)
 				ctrl.eventRecorder.Event(claim, v1.EventTypeWarning, "ProvisioningFailed", err.Error())
-				return err
+				return ProvisioningNoChange, err
 			}
 		}
 
@@ -1120,7 +1120,7 @@ func (ctrl *ProvisionController) provisionClaimOperation(claim *v1.PersistentVol
 		if err != nil {
 			err = fmt.Errorf("failed to get AllowedTopologies from StorageClass: %v", err)
 			ctrl.eventRecorder.Event(claim, v1.EventTypeWarning, "ProvisioningFailed", err.Error())
-			return err
+			return ProvisioningNoChange, err
 		}
 	}
 
@@ -1136,16 +1136,21 @@ func (ctrl *ProvisionController) provisionClaimOperation(claim *v1.PersistentVol
 
 	ctrl.eventRecorder.Event(claim, v1.EventTypeNormal, "Provisioning", fmt.Sprintf("External provisioner is provisioning volume for claim %q", claimToClaimKey(claim)))
 
-	volume, err = ctrl.provisioner.Provision(options)
+	result := ProvisioningFinished
+	if p, ok := ctrl.provisioner.(ProvisionerExt); ok {
+		volume, result, err = p.ProvisionExt(options)
+	} else {
+		volume, err = ctrl.provisioner.Provision(options)
+	}
 	if err != nil {
 		if ierr, ok := err.(*IgnoredError); ok {
 			// Provision ignored, do nothing and hope another provisioner will provision it.
 			glog.Info(logOperation(operation, "volume provision ignored: %v", ierr))
-			return nil
+			return ProvisioningFinished, nil
 		}
 		err = fmt.Errorf("failed to provision volume with StorageClass %q: %v", claimClass, err)
 		ctrl.eventRecorder.Event(claim, v1.EventTypeWarning, "ProvisioningFailed", err.Error())
-		return err
+		return result, err
 	}
 
 	glog.Info(logOperation(operation, "volume %q provisioned", volume.Name))
@@ -1218,7 +1223,7 @@ func (ctrl *ProvisionController) provisionClaimOperation(claim *v1.PersistentVol
 	}
 
 	glog.Info(logOperation(operation, "succeeded"))
-	return nil
+	return ProvisioningFinished, nil
 }
 
 // deleteVolumeOperation attempts to delete the volume backing the given
