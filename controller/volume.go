@@ -62,6 +62,42 @@ type BlockProvisioner interface {
 	SupportsBlock() bool
 }
 
+// ProvisionerExt is an optional interface implemented by provisioners that
+// can return enhanced error code from provisioner.
+type ProvisionerExt interface {
+	// ProvisionExt creates a volume i.e. the storage asset and returns a PV object
+	// for the volume. The provisioner can return an error (e.g. timeout) and state
+	// ProvisioningInBackground to tell the controller that provisioning may be in
+	// progress after ProvisionExt() finishes. The controller will call ProvisionExt()
+	// again with the same parameters, assuming that the provisioner continues
+	// provisioning the volume. The provisioner must return either final error (with
+	// ProvisioningFinished) or success eventually, otherwise the controller will try
+	// forever (unless FailedProvisionThreshold is set).
+	ProvisionExt(options VolumeOptions) (*v1.PersistentVolume, ProvisioningState, error)
+}
+
+// ProvisioningState is state of volume provisioning. It tells the controller if
+// provisioning could be in progress in the background after ProvisionExt() call
+// returns or the provisioning is 100% finished (either with success or error).
+type ProvisioningState string
+
+const (
+	// ProvisioningInBackground tells the controller that provisioning may be in
+	// progress in background after ProvisionExt call finished.
+	ProvisioningInBackground ProvisioningState = "Background"
+	// ProvisioningFinished tells the controller that provisioning for sure does
+	// not continue in background, error code of ProvisionExt() is final.
+	ProvisioningFinished ProvisioningState = "Finished"
+	// ProvisioningNoChange tells the controller that provisioning state is the same as
+	// before the call - either ProvisioningInBackground or ProvisioningFinished from
+	// the previous ProvisionExt(). This state is typically returned by a provisioner
+	// before it could reach storage backend - the provisioner could not check status
+	// of provisioning and previous state applies. If this state is returned from the
+	// first ProvisionExt call, ProvisioningFinished is assumed (the provisioning
+	// could not even start).
+	ProvisioningNoChange ProvisioningState = "NoChange"
+)
+
 // IgnoredError is the value for Delete to return to indicate that the call has
 // been ignored and no action taken. In case multiple provisioners are serving
 // the same storage class, provisioners may ignore PVs they are not responsible

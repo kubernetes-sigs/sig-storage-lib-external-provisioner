@@ -31,6 +31,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	"k8s.io/apimachinery/pkg/util/sets"
 	utilversion "k8s.io/apimachinery/pkg/util/version"
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
@@ -39,6 +40,7 @@ import (
 	testclient "k8s.io/client-go/testing"
 	"k8s.io/client-go/tools/cache"
 	ref "k8s.io/client-go/tools/reference"
+	"k8s.io/klog"
 )
 
 const (
@@ -47,17 +49,24 @@ const (
 	defaultServerVersion = "v1.5.0"
 )
 
+func init() {
+	klog.InitFlags(nil)
+}
+
 // TODO clean this up, e.g. remove redundant params (provisionerName: "foo.bar/baz")
 func TestController(t *testing.T) {
 	tests := []struct {
-		name            string
-		objs            []runtime.Object
-		provisionerName string
-		provisioner     Provisioner
-		verbs           []string
-		reaction        testclient.ReactionFunc
-		expectedVolumes []v1.PersistentVolume
-		serverVersion   string
+		name                     string
+		objs                     []runtime.Object
+		claimsInProgress         []*v1.PersistentVolumeClaim
+		enqueueClaim             *v1.PersistentVolumeClaim
+		provisionerName          string
+		provisioner              Provisioner
+		verbs                    []string
+		reaction                 testclient.ReactionFunc
+		expectedVolumes          []v1.PersistentVolume
+		expectedClaimsInProgress []string
+		serverVersion            string
 	}{
 		{
 			name: "provision for claim-1 but not claim-2",
@@ -201,6 +210,103 @@ func TestController(t *testing.T) {
 				*newProvisionedVolumeWithSpecifiedReclaimPolicy(newStorageClassWithSpecifiedReclaimPolicy("class-1", "foo.bar/baz", v1.PersistentVolumeReclaimRetain), newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil)),
 			},
 		},
+		{
+			name: "provision for ext provisioner",
+			objs: []runtime.Object{
+				newBetaStorageClass("class-1", "foo.bar/baz"),
+				newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil),
+			},
+			provisionerName: "foo.bar/baz",
+			provisioner:     newExtProvisioner(t, "pvc-uid-1-1", ProvisioningFinished, nil),
+			expectedVolumes: []v1.PersistentVolume{
+				*newProvisionedVolume(newBetaStorageClass("class-1", "foo.bar/baz"), newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil)),
+			},
+		},
+		{
+			name: "ext provisioner: final error does not mark claim as in progress",
+			objs: []runtime.Object{
+				newBetaStorageClass("class-1", "foo.bar/baz"),
+				newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil),
+			},
+			provisionerName:          "foo.bar/baz",
+			provisioner:              newExtProvisioner(t, "pvc-uid-1-1", ProvisioningFinished, fmt.Errorf("mock error")),
+			expectedClaimsInProgress: []string{},
+		},
+		{
+			name: "ext provisioner: provisional error marks claim as in progress",
+			objs: []runtime.Object{
+				newBetaStorageClass("class-1", "foo.bar/baz"),
+				newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil),
+			},
+			provisionerName:          "foo.bar/baz",
+			provisioner:              newExtProvisioner(t, "pvc-uid-1-1", ProvisioningInBackground, fmt.Errorf("mock error")),
+			expectedClaimsInProgress: []string{"uid-1-1"},
+		},
+		{
+			name: "ext provisioner: NoChange error does not mark claim as in progress",
+			objs: []runtime.Object{
+				newBetaStorageClass("class-1", "foo.bar/baz"),
+				newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil),
+			},
+			provisionerName:          "foo.bar/baz",
+			provisioner:              newExtProvisioner(t, "pvc-uid-1-1", ProvisioningNoChange, fmt.Errorf("mock error")),
+			expectedClaimsInProgress: []string{},
+		},
+		{
+			name: "ext provisioner: final error removes claim from in progress",
+			objs: []runtime.Object{
+				newBetaStorageClass("class-1", "foo.bar/baz"),
+				newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil),
+			},
+			claimsInProgress: []*v1.PersistentVolumeClaim{
+				newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil),
+			},
+			provisionerName:          "foo.bar/baz",
+			provisioner:              newExtProvisioner(t, "pvc-uid-1-1", ProvisioningFinished, fmt.Errorf("mock error")),
+			expectedClaimsInProgress: []string{},
+		},
+		{
+			name: "ext provisioner: provisional error does not remove claim from in progress",
+			objs: []runtime.Object{
+				newBetaStorageClass("class-1", "foo.bar/baz"),
+				newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil),
+			},
+			claimsInProgress: []*v1.PersistentVolumeClaim{
+				newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil),
+			},
+			provisionerName:          "foo.bar/baz",
+			provisioner:              newExtProvisioner(t, "pvc-uid-1-1", ProvisioningInBackground, fmt.Errorf("mock error")),
+			expectedClaimsInProgress: []string{"uid-1-1"},
+		},
+		{
+			name: "ext provisioner: NoChange error does not remove claim from in progress",
+			objs: []runtime.Object{
+				newBetaStorageClass("class-1", "foo.bar/baz"),
+				newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil),
+			},
+			claimsInProgress: []*v1.PersistentVolumeClaim{
+				newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil),
+			},
+			provisionerName:          "foo.bar/baz",
+			provisioner:              newExtProvisioner(t, "pvc-uid-1-1", ProvisioningNoChange, fmt.Errorf("mock error")),
+			expectedClaimsInProgress: []string{"uid-1-1"},
+		},
+		{
+			name: "ext provisioner: claimsInProgress is used for deleted PVCs",
+			objs: []runtime.Object{
+				newBetaStorageClass("class-1", "foo.bar/baz"),
+			},
+			claimsInProgress: []*v1.PersistentVolumeClaim{
+				newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil),
+			},
+			enqueueClaim:             newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil),
+			provisionerName:          "foo.bar/baz",
+			provisioner:              newExtProvisioner(t, "pvc-uid-1-1", ProvisioningFinished, nil),
+			expectedClaimsInProgress: []string{},
+			expectedVolumes: []v1.PersistentVolume{
+				*newProvisionedVolume(newBetaStorageClass("class-1", "foo.bar/baz"), newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil)),
+			},
+		},
 	}
 	for _, test := range tests {
 		client := fake.NewSimpleClientset(test.objs...)
@@ -215,6 +321,14 @@ func TestController(t *testing.T) {
 			serverVersion = test.serverVersion
 		}
 		ctrl := newTestProvisionController(client, test.provisionerName, test.provisioner, serverVersion)
+		for _, claim := range test.claimsInProgress {
+			ctrl.claimsInProgress.Store(string(claim.UID), claim)
+		}
+
+		if test.enqueueClaim != nil {
+			ctrl.enqueueClaim(test.enqueueClaim)
+		}
+
 		stopCh := make(chan struct{})
 		go ctrl.Run(stopCh)
 
@@ -228,6 +342,16 @@ func TestController(t *testing.T) {
 		if !reflect.DeepEqual(test.expectedVolumes, pvList.Items) {
 			t.Logf("test case: %s", test.name)
 			t.Errorf("expected PVs:\n %v\n but got:\n %v\n", test.expectedVolumes, pvList.Items)
+		}
+
+		claimsInProgress := sets.NewString()
+		ctrl.claimsInProgress.Range(func(key, value interface{}) bool {
+			claimsInProgress.Insert(key.(string))
+			return true
+		})
+		expectedClaimsInProgress := sets.NewString(test.expectedClaimsInProgress...)
+		if !claimsInProgress.Equal(expectedClaimsInProgress) {
+			t.Errorf("expected claimsInProgres: %+v, got %+v", expectedClaimsInProgress.List(), claimsInProgress.List())
 		}
 		close(stopCh)
 	}
@@ -1050,4 +1174,65 @@ func (i *ignoredProvisioner) Provision(options VolumeOptions) (*v1.PersistentVol
 
 func (i *ignoredProvisioner) Delete(volume *v1.PersistentVolume) error {
 	return nil
+}
+
+func newExtProvisioner(t *testing.T, pvName string, returnStatus ProvisioningState, returnError error) *extProvisioner {
+	return &extProvisioner{
+		t:            t,
+		pvName:       pvName,
+		returnError:  returnError,
+		returnStatus: returnStatus,
+	}
+}
+
+type extProvisioner struct {
+	t            *testing.T
+	pvName       string
+	returnError  error
+	returnStatus ProvisioningState
+}
+
+var _ Provisioner = &extProvisioner{}
+var _ ProvisionerExt = &extProvisioner{}
+
+func (m *extProvisioner) Provision(VolumeOptions) (*v1.PersistentVolume, error) {
+	return nil, fmt.Errorf("Not implemented")
+}
+
+func (m *extProvisioner) Delete(pv *v1.PersistentVolume) error {
+	return fmt.Errorf("Not implemented")
+
+}
+
+func (m *extProvisioner) ProvisionExt(options VolumeOptions) (*v1.PersistentVolume, ProvisioningState, error) {
+	if m.pvName != options.PVName {
+		m.t.Errorf("Invalid provision call, expected name %q, got %q", m.pvName, options.PVName)
+		return nil, ProvisioningFinished, fmt.Errorf("Invalid provision call, expected name %q, got %q", m.pvName, options.PVName)
+	}
+	klog.Infof("ProvisionExt() call")
+
+	if m.returnError == nil {
+		pv := &v1.PersistentVolume{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: options.PVName,
+			},
+			Spec: v1.PersistentVolumeSpec{
+				PersistentVolumeReclaimPolicy: options.PersistentVolumeReclaimPolicy,
+				AccessModes:                   options.PVC.Spec.AccessModes,
+				Capacity: v1.ResourceList{
+					v1.ResourceName(v1.ResourceStorage): options.PVC.Spec.Resources.Requests[v1.ResourceName(v1.ResourceStorage)],
+				},
+				PersistentVolumeSource: v1.PersistentVolumeSource{
+					NFS: &v1.NFSVolumeSource{
+						Server:   "foo",
+						Path:     "bar",
+						ReadOnly: false,
+					},
+				},
+			},
+		}
+		return pv, ProvisioningFinished, nil
+
+	}
+	return nil, m.returnStatus, m.returnError
 }
