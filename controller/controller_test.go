@@ -40,11 +40,12 @@ import (
 	testclient "k8s.io/client-go/testing"
 	"k8s.io/client-go/tools/cache"
 	ref "k8s.io/client-go/tools/reference"
+	"k8s.io/client-go/util/workqueue"
 	"k8s.io/klog"
 )
 
 const (
-	resyncPeriod         = 100 * time.Millisecond
+	resyncPeriod         = 1000 * time.Millisecond
 	sharedResyncPeriod   = 1 * time.Second
 	defaultServerVersion = "v1.5.0"
 )
@@ -55,6 +56,9 @@ func init() {
 
 // TODO clean this up, e.g. remove redundant params (provisionerName: "foo.bar/baz")
 func TestController(t *testing.T) {
+	// Counter of reactor calls, if a test needs it. Reset to zero before a test starts.
+	var callCounter int
+
 	tests := []struct {
 		name                     string
 		objs                     []runtime.Object
@@ -66,6 +70,7 @@ func TestController(t *testing.T) {
 		reaction                 testclient.ReactionFunc
 		expectedVolumes          []v1.PersistentVolume
 		expectedClaimsInProgress []string
+		expectedUnsavedVolumes   []string
 		serverVersion            string
 	}{
 		{
@@ -167,7 +172,32 @@ func TestController(t *testing.T) {
 			reaction: func(action testclient.Action) (handled bool, ret runtime.Object, err error) {
 				return true, nil, errors.New("fake error")
 			},
-			expectedVolumes: []v1.PersistentVolume(nil),
+			expectedVolumes:          []v1.PersistentVolume(nil),
+			expectedClaimsInProgress: []string{"uid-1-1"},
+			expectedUnsavedVolumes:   []string{"uid-1-1"},
+		},
+		{
+			name: "try to provision for claim-1, but fail to save the pv object once and succeed second time",
+			objs: []runtime.Object{
+				newBetaStorageClass("class-22", "foo.bar/baz"),
+				newClaim("claim-22", "uid-1-1", "class-22", "foo.bar/baz", "", nil),
+			},
+			provisionerName: "foo.bar/baz",
+			provisioner:     newTestProvisioner(),
+			verbs:           []string{"create"},
+			reaction: func(action testclient.Action) (handled bool, ret runtime.Object, err error) {
+				callCounter++
+				if callCounter == 1 {
+					// The first call fails
+					return true, nil, errors.New("fake error")
+				}
+				// Any other call succeeds
+				return false, nil, nil
+			},
+			expectedVolumes: []v1.PersistentVolume{
+				*newProvisionedVolume(newBetaStorageClass("class-22", "foo.bar/baz"), newClaim("claim-22", "uid-1-1", "class-22", "foo.bar/baz", "", nil)),
+			},
+			expectedUnsavedVolumes: []string{},
 		},
 		{
 			name: "try to delete volume-1 but fail to delete the pv object",
@@ -309,6 +339,9 @@ func TestController(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
+		klog.Infof("starting test %s", test.name)
+		callCounter = 0
+
 		client := fake.NewSimpleClientset(test.objs...)
 		if len(test.verbs) != 0 {
 			for _, v := range test.verbs {
@@ -351,9 +384,20 @@ func TestController(t *testing.T) {
 		})
 		expectedClaimsInProgress := sets.NewString(test.expectedClaimsInProgress...)
 		if !claimsInProgress.Equal(expectedClaimsInProgress) {
-			t.Errorf("expected claimsInProgres: %+v, got %+v", expectedClaimsInProgress.List(), claimsInProgress.List())
+			t.Errorf("test %q: expected claimsInProgres: %+v, got %+v", test.name, expectedClaimsInProgress.List(), claimsInProgress.List())
+		}
+
+		unsavedVolumes := sets.NewString()
+		ctrl.unsavedVolumes.Range(func(key, value interface{}) bool {
+			unsavedVolumes.Insert(key.(string))
+			return true
+		})
+		expectedUnsavedVolumes := sets.NewString(test.expectedUnsavedVolumes...)
+		if !unsavedVolumes.Equal(expectedUnsavedVolumes) {
+			t.Errorf("test %q: expected unsavedVolumes: %+v, got %+v", test.name, expectedUnsavedVolumes.List(), unsavedVolumes.List())
 		}
 		close(stopCh)
+		klog.Infof("finished test %s", test.name)
 	}
 }
 
@@ -835,7 +879,9 @@ func newTestProvisionController(
 		CreateProvisionedPVInterval(10*time.Millisecond),
 		LeaseDuration(2*resyncPeriod),
 		RenewDeadline(resyncPeriod),
-		RetryPeriod(resyncPeriod/2))
+		RetryPeriod(resyncPeriod/2),
+		RateLimiter(workqueue.NewItemExponentialFailureRateLimiter(15*time.Millisecond, 1000*time.Millisecond)),
+	)
 	return ctrl
 }
 

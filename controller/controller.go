@@ -158,6 +158,9 @@ type ProvisionController struct {
 
 	// Map UID -> *PVC with all claims that may be provisioned in the background.
 	claimsInProgress sync.Map
+
+	// Map PVC UID -> *PV that's waiting to be saved
+	unsavedVolumes sync.Map
 }
 
 const (
@@ -925,7 +928,14 @@ func (ctrl *ProvisionController) syncClaim(obj interface{}) (ProvisioningState, 
 
 	if ctrl.shouldProvision(claim) {
 		startTime := time.Now()
-		status, err := ctrl.provisionClaimOperation(claim)
+
+		var status ProvisioningState
+		var err error
+		if pv := ctrl.hasUnsavedVolume(claim); pv != nil {
+			status, err = ctrl.saveVolume(claim, pv)
+		} else {
+			status, err = ctrl.provisionClaimOperation(claim)
+		}
 		ctrl.updateProvisionStats(claim, err, startTime)
 		return status, err
 	}
@@ -1202,60 +1212,36 @@ func (ctrl *ProvisionController) provisionClaimOperation(claim *v1.PersistentVol
 		metav1.SetMetaDataAnnotation(&volume.ObjectMeta, annClass, claimClass)
 	}
 
+	glog.Info(logOperation(operation, "succeeded"))
+
+	// Reset any exponential backoff for the volume and start from zero
+	ctrl.claimQueue.Forget(claim)
+	return ctrl.saveVolume(claim, volume)
+}
+
+func (ctrl *ProvisionController) saveVolume(claim *v1.PersistentVolumeClaim, volume *v1.PersistentVolume) (ProvisioningState, error) {
 	// Try to create the PV object several times
-	var lastSaveError error
-	err = wait.ExponentialBackoff(*ctrl.createProvisionedPVBackoff, func() (bool, error) {
-		glog.Info(logOperation(operation, "trying to save persistentvolume %q", volume.Name))
-		if _, err = ctrl.client.CoreV1().PersistentVolumes().Create(volume); err == nil || apierrs.IsAlreadyExists(err) {
-			// Save succeeded.
-			if err != nil {
-				glog.Info(logOperation(operation, "persistentvolume %q already exists, reusing", volume.Name))
-			} else {
-				glog.Info(logOperation(operation, "persistentvolume %q saved", volume.Name))
-			}
-			return true, nil
-		}
-		// Save failed, try again after a while.
-		glog.Info(logOperation(operation, "failed to save persistentvolume %q: %v", volume.Name, err))
-		lastSaveError = err
-		return false, nil
-	})
+	operation := fmt.Sprintf("saving PV %s for claim %s", volume.Name, claimToClaimKey(claim))
+	glog.Info(logOperation(operation, "starting"))
 
-	if err != nil {
-		// Save failed. Now we have a storage asset outside of Kubernetes,
-		// but we don't have appropriate PV object for it.
-		// Emit some event here and try to delete the storage asset several
-		// times.
-		strerr := fmt.Sprintf("Error creating provisioned PV object for claim %s: %v. Deleting the volume.", claimToClaimKey(claim), lastSaveError)
-		glog.Error(logOperation(operation, strerr))
-		ctrl.eventRecorder.Event(claim, v1.EventTypeWarning, "ProvisioningFailed", strerr)
-
-		var lastDeleteError error
-		err = wait.ExponentialBackoff(*ctrl.createProvisionedPVBackoff, func() (bool, error) {
-			if err = ctrl.provisioner.Delete(volume); err == nil {
-				// Delete succeeded
-				glog.Info(logOperation(operation, "cleaning volume %q succeeded", volume.Name))
-				return true, nil
-			}
-			// Delete failed, try again after a while.
-			glog.Info(logOperation(operation, "failed to clean volume %q: %v", volume.Name, err))
-			lastDeleteError = err
-			return false, nil
-		})
+	_, err := ctrl.client.CoreV1().PersistentVolumes().Create(volume)
+	if err == nil || apierrs.IsAlreadyExists(err) {
+		// Save succeeded.
+		ctrl.forgetUnsavedVolume(claim)
 		if err != nil {
-			// Delete failed several times. There is an orphaned volume and there
-			// is nothing we can do about it.
-			strerr := fmt.Sprintf("Error cleaning provisioned volume for claim %s: %v. Please delete manually.", claimToClaimKey(claim), lastDeleteError)
-			glog.Error(logOperation(operation, strerr))
-			ctrl.eventRecorder.Event(claim, v1.EventTypeWarning, "ProvisioningCleanupFailed", strerr)
+			glog.Info(logOperation(operation, "volume already exists, reusing"))
+		} else {
+			glog.Info(logOperation(operation, "volume saved"))
 		}
-	} else {
-		msg := fmt.Sprintf("Successfully provisioned volume %s", volume.Name)
-		ctrl.eventRecorder.Event(claim, v1.EventTypeNormal, "ProvisioningSucceeded", msg)
+		return ProvisioningFinished, nil
 	}
 
-	glog.Info(logOperation(operation, "succeeded"))
-	return ProvisioningFinished, nil
+	// Save failed, try again after a while.
+	glog.Info(logOperation(operation, "failed: %v", err))
+	ctrl.storeUnsavedVolume(claim, volume)
+
+	// Return ProvisioningInBackground, we don't want the provisioner to forget the claim if user deletes it.
+	return ProvisioningInBackground, err
 }
 
 // deleteVolumeOperation attempts to delete the volume backing the given
@@ -1457,4 +1443,25 @@ func (ctrl *ProvisionController) supportsBlock() bool {
 		return blockProvisioner.SupportsBlock()
 	}
 	return false
+}
+
+func (ctrl *ProvisionController) storeUnsavedVolume(claim *v1.PersistentVolumeClaim, volume *v1.PersistentVolume) {
+	ctrl.unsavedVolumes.Store(string(claim.UID), volume)
+}
+
+func (ctrl *ProvisionController) forgetUnsavedVolume(claim *v1.PersistentVolumeClaim) {
+	ctrl.unsavedVolumes.Delete(string(claim.UID))
+}
+
+func (ctrl *ProvisionController) hasUnsavedVolume(claim *v1.PersistentVolumeClaim) *v1.PersistentVolume {
+	obj, ok := ctrl.unsavedVolumes.Load(string(claim.UID))
+	if !ok {
+		return nil
+	}
+
+	pv, ok := obj.(*v1.PersistentVolume)
+	if !ok {
+		return nil
+	}
+	return pv
 }
