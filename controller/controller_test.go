@@ -810,7 +810,7 @@ func TestControllerSharedInformers(t *testing.T) {
 		informersFactory.WaitForCacheSync(stopCh)
 		time.Sleep(2 * sharedResyncPeriod)
 
-		pvList, _ := client.Core().PersistentVolumes().List(metav1.ListOptions{})
+		pvList, _ := client.CoreV1().PersistentVolumes().List(metav1.ListOptions{})
 		if (len(test.expectedVolumes) > 0 || len(pvList.Items) > 0) &&
 			!reflect.DeepEqual(test.expectedVolumes, pvList.Items) {
 			t.Logf("test case: %s", test.name)
