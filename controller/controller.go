@@ -92,6 +92,10 @@ type ProvisionController struct {
 	// annStorageProvisioner to set & watch for, respectively
 	provisionerName string
 
+	// additional provisioner names (beyond provisionerName) that the
+	// provisioner should watch for and handle in annStorageProvisioner
+	additionalProvisionerNames []string
+
 	// The provisioner the controller will use to provision and delete volumes.
 	// Presumably this implementer of Provisioner carries its own
 	// volume-specific options and such that it needs in order to provision
@@ -449,6 +453,17 @@ func MetricsPath(metricsPath string) func(*ProvisionController) error {
 			return errRuntime
 		}
 		c.metricsPath = metricsPath
+		return nil
+	}
+}
+
+// AdditionalProvisionerNames sets additional names for the provisioner
+func AdditionalProvisionerNames(additionalProvisionerNames []string) func(*ProvisionController) error {
+	return func(c *ProvisionController) error {
+		if c.HasRun() {
+			return errRuntime
+		}
+		c.additionalProvisionerNames = additionalProvisionerNames
 		return nil
 	}
 }
@@ -948,6 +963,20 @@ func (ctrl *ProvisionController) syncVolume(obj interface{}) error {
 	return nil
 }
 
+// knownProvisioner checks if provisioner name has been
+// configured to provision volumes for
+func (ctrl *ProvisionController) knownProvisioner(provisioner string) bool {
+	if provisioner == ctrl.provisionerName {
+		return true
+	}
+	for _, p := range ctrl.additionalProvisionerNames {
+		if p == provisioner {
+			return true
+		}
+	}
+	return false
+}
+
 // shouldProvision returns whether a claim should have a volume provisioned for
 // it, i.e. whether a Provision is "desired"
 func (ctrl *ProvisionController) shouldProvision(claim *v1.PersistentVolumeClaim) bool {
@@ -964,10 +993,9 @@ func (ctrl *ProvisionController) shouldProvision(claim *v1.PersistentVolumeClaim
 	// Kubernetes 1.5 provisioning with annStorageProvisioner
 	if ctrl.kubeVersion.AtLeast(utilversion.MustParseSemantic("v1.5.0")) {
 		if provisioner, found := claim.Annotations[annStorageProvisioner]; found {
-			if provisioner == ctrl.provisionerName {
+			if ctrl.knownProvisioner(provisioner) {
 				return true
 			}
-			return false
 		}
 	} else {
 		// Kubernetes 1.4 provisioning, evaluating class.Provisioner
@@ -1106,7 +1134,7 @@ func (ctrl *ProvisionController) provisionClaimOperation(claim *v1.PersistentVol
 		glog.Error(logOperation(operation, "error getting claim's StorageClass's fields: %v", err))
 		return ProvisioningFinished, nil
 	}
-	if provisioner != ctrl.provisionerName {
+	if !ctrl.knownProvisioner(provisioner) {
 		// class.Provisioner has either changed since shouldProvision() or
 		// annDynamicallyProvisioned contains different provisioner than
 		// class.Provisioner.

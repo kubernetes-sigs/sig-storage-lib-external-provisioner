@@ -56,17 +56,18 @@ func init() {
 // TODO clean this up, e.g. remove redundant params (provisionerName: "foo.bar/baz")
 func TestController(t *testing.T) {
 	tests := []struct {
-		name                     string
-		objs                     []runtime.Object
-		claimsInProgress         []*v1.PersistentVolumeClaim
-		enqueueClaim             *v1.PersistentVolumeClaim
-		provisionerName          string
-		provisioner              Provisioner
-		verbs                    []string
-		reaction                 testclient.ReactionFunc
-		expectedVolumes          []v1.PersistentVolume
-		expectedClaimsInProgress []string
-		serverVersion            string
+		name                       string
+		objs                       []runtime.Object
+		claimsInProgress           []*v1.PersistentVolumeClaim
+		enqueueClaim               *v1.PersistentVolumeClaim
+		provisionerName            string
+		additionalProvisionerNames []string
+		provisioner                Provisioner
+		verbs                      []string
+		reaction                   testclient.ReactionFunc
+		expectedVolumes            []v1.PersistentVolume
+		expectedClaimsInProgress   []string
+		serverVersion              string
 	}{
 		{
 			name: "provision for claim-1 but not claim-2",
@@ -80,6 +81,19 @@ func TestController(t *testing.T) {
 			provisioner:     newTestProvisioner(),
 			expectedVolumes: []v1.PersistentVolume{
 				*newProvisionedVolume(newBetaStorageClass("class-1", "foo.bar/baz"), newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil)),
+			},
+		},
+		{
+			name: "provision for claim-1 with storage class provisioner name distinct from controller provisioner name",
+			objs: []runtime.Object{
+				newBetaStorageClass("class-1", "foo.bar/baz"),
+				newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil),
+			},
+			provisionerName:            "csi.com/mock-csi",
+			additionalProvisionerNames: []string{"foo.bar/baz", "foo.xyz/baz"},
+			provisioner:                newTestProvisioner(),
+			expectedVolumes: []v1.PersistentVolume{
+				*newProvisionedVolume(newBetaStorageClass("class-1", "csi.com/mock-csi"), newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil)),
 			},
 		},
 		{
@@ -320,7 +334,13 @@ func TestController(t *testing.T) {
 		if test.serverVersion != "" {
 			serverVersion = test.serverVersion
 		}
-		ctrl := newTestProvisionController(client, test.provisionerName, test.provisioner, serverVersion)
+
+		var ctrl *ProvisionController
+		if test.additionalProvisionerNames == nil {
+			ctrl = newTestProvisionController(client, test.provisionerName, test.provisioner, serverVersion)
+		} else {
+			ctrl = newTestProvisionControllerWithAdditionalNames(client, test.provisionerName, test.provisioner, serverVersion, test.additionalProvisionerNames)
+		}
 		for _, claim := range test.claimsInProgress {
 			ctrl.claimsInProgress.Store(string(claim.UID), claim)
 		}
@@ -459,21 +479,31 @@ func TestTopologyParams(t *testing.T) {
 
 func TestShouldProvision(t *testing.T) {
 	tests := []struct {
-		name             string
-		provisionerName  string
-		provisioner      Provisioner
-		class            *storagebeta.StorageClass
-		claim            *v1.PersistentVolumeClaim
-		serverGitVersion string
-		expectedShould   bool
+		name                       string
+		provisionerName            string
+		additionalProvisionerNames []string
+		provisioner                Provisioner
+		class                      *storagebeta.StorageClass
+		claim                      *v1.PersistentVolumeClaim
+		serverGitVersion           string
+		expectedShould             bool
 	}{
 		{
-			name:            "should provision",
+			name:            "should provision based on provisionerName",
 			provisionerName: "foo.bar/baz",
 			provisioner:     newTestProvisioner(),
 			class:           newBetaStorageClass("class-1", "foo.bar/baz"),
 			claim:           newClaim("claim-1", "1-1", "class-1", "foo.bar/baz", "", nil),
 			expectedShould:  true,
+		},
+		{
+			name:                       "should provision based on additionalProvisionerNames",
+			provisionerName:            "csi.com/mock-csi",
+			additionalProvisionerNames: []string{"foo.bar/baz", "foo.xyz/baz"},
+			provisioner:                newTestProvisioner(),
+			class:                      newBetaStorageClass("class-1", "foo.bar/baz"),
+			claim:                      newClaim("claim-1", "1-1", "class-1", "foo.bar/baz", "", nil),
+			expectedShould:             true,
 		},
 		{
 			name:            "claim already bound",
@@ -562,7 +592,13 @@ func TestShouldProvision(t *testing.T) {
 		if test.serverGitVersion != "" {
 			serverVersion = test.serverGitVersion
 		}
-		ctrl := newTestProvisionController(client, test.provisionerName, test.provisioner, serverVersion)
+
+		var ctrl *ProvisionController
+		if test.additionalProvisionerNames == nil {
+			ctrl = newTestProvisionController(client, test.provisionerName, test.provisioner, serverVersion)
+		} else {
+			ctrl = newTestProvisionControllerWithAdditionalNames(client, test.provisionerName, test.provisioner, serverVersion, test.additionalProvisionerNames)
+		}
 
 		err := ctrl.classes.Add(test.class)
 		if err != nil {
@@ -836,6 +872,27 @@ func newTestProvisionController(
 		LeaseDuration(2*resyncPeriod),
 		RenewDeadline(resyncPeriod),
 		RetryPeriod(resyncPeriod/2))
+	return ctrl
+}
+
+func newTestProvisionControllerWithAdditionalNames(
+	client kubernetes.Interface,
+	provisionerName string,
+	provisioner Provisioner,
+	serverGitVersion string,
+	additionalProvisionerNames []string,
+) *ProvisionController {
+	ctrl := NewProvisionController(
+		client,
+		provisionerName,
+		provisioner,
+		serverGitVersion,
+		ResyncPeriod(resyncPeriod),
+		CreateProvisionedPVInterval(10*time.Millisecond),
+		LeaseDuration(2*resyncPeriod),
+		RenewDeadline(resyncPeriod),
+		RetryPeriod(resyncPeriod/2),
+		AdditionalProvisionerNames(additionalProvisionerNames))
 	return ctrl
 }
 
