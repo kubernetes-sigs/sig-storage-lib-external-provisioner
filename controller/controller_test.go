@@ -40,6 +40,7 @@ import (
 	testclient "k8s.io/client-go/testing"
 	"k8s.io/client-go/tools/cache"
 	ref "k8s.io/client-go/tools/reference"
+	"k8s.io/client-go/util/workqueue"
 	"k8s.io/klog"
 )
 
@@ -55,6 +56,8 @@ func init() {
 
 // TODO clean this up, e.g. remove redundant params (provisionerName: "foo.bar/baz")
 func TestController(t *testing.T) {
+	var reflectorCallCount int
+
 	tests := []struct {
 		name                       string
 		objs                       []runtime.Object
@@ -68,6 +71,8 @@ func TestController(t *testing.T) {
 		expectedVolumes            []v1.PersistentVolume
 		expectedClaimsInProgress   []string
 		serverVersion              string
+		volumeQueueStore           bool
+		expectedStoredVolumes      []*v1.PersistentVolume
 	}{
 		{
 			name: "provision for claim-1 but not claim-2",
@@ -321,8 +326,51 @@ func TestController(t *testing.T) {
 				*newProvisionedVolume(newBetaStorageClass("class-1", "foo.bar/baz"), newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil)),
 			},
 		},
+		{
+			name: "PV save backoff: provision a PV and fail to save it -> it's in the queue",
+			objs: []runtime.Object{
+				newBetaStorageClass("class-1", "foo.bar/baz"),
+				newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil),
+			},
+			provisionerName: "foo.bar/baz",
+			provisioner:     newTestProvisioner(),
+			verbs:           []string{"create"},
+			reaction: func(action testclient.Action) (handled bool, ret runtime.Object, err error) {
+				return true, nil, errors.New("fake error")
+			},
+			expectedVolumes:  []v1.PersistentVolume(nil),
+			volumeQueueStore: true,
+			expectedStoredVolumes: []*v1.PersistentVolume{
+				newProvisionedVolume(newBetaStorageClass("class-1", "foo.bar/baz"), newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil)),
+			},
+		},
+		{
+			name: "PV save backoff: provision a PV and fail to save it two times -> it's removed from the queue",
+			objs: []runtime.Object{
+				newBetaStorageClass("class-1", "foo.bar/baz"),
+				newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil),
+			},
+			provisionerName: "foo.bar/baz",
+			provisioner:     newTestProvisioner(),
+			verbs:           []string{"create"},
+			reaction: func(action testclient.Action) (handled bool, ret runtime.Object, err error) {
+				reflectorCallCount++
+				if reflectorCallCount <= 2 {
+					return true, nil, errors.New("fake error")
+				}
+				return false, nil, nil
+			},
+			expectedVolumes: []v1.PersistentVolume{
+				*newProvisionedVolume(newBetaStorageClass("class-1", "foo.bar/baz"), newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil)),
+			},
+			volumeQueueStore:      true,
+			expectedStoredVolumes: []*v1.PersistentVolume{},
+		},
 	}
 	for _, test := range tests {
+		klog.Infof("starting %q", test.name)
+		reflectorCallCount = 0
+
 		client := fake.NewSimpleClientset(test.objs...)
 		if len(test.verbs) != 0 {
 			for _, v := range test.verbs {
@@ -343,6 +391,10 @@ func TestController(t *testing.T) {
 		}
 		for _, claim := range test.claimsInProgress {
 			ctrl.claimsInProgress.Store(string(claim.UID), claim)
+		}
+
+		if test.volumeQueueStore {
+			ctrl.volumeStore = NewVolumeStoreQueue(client, workqueue.DefaultItemBasedRateLimiter())
 		}
 
 		if test.enqueueClaim != nil {
@@ -372,6 +424,31 @@ func TestController(t *testing.T) {
 		expectedClaimsInProgress := sets.NewString(test.expectedClaimsInProgress...)
 		if !claimsInProgress.Equal(expectedClaimsInProgress) {
 			t.Errorf("expected claimsInProgres: %+v, got %+v", expectedClaimsInProgress.List(), claimsInProgress.List())
+		}
+
+		if test.volumeQueueStore {
+			queue := ctrl.volumeStore.(*queueStore)
+			// convert queue.volumes to array
+			queuedVolumes := []*v1.PersistentVolume{}
+			queue.volumes.Range(func(key, value interface{}) bool {
+				volume, ok := value.(*v1.PersistentVolume)
+				if !ok {
+					t.Errorf("test case: %s, Expected PersistentVolume in volume store queue, got %+v", test.name, value)
+				}
+				queuedVolumes = append(queuedVolumes, volume)
+				return true
+			})
+			if !reflect.DeepEqual(test.expectedStoredVolumes, queuedVolumes) {
+				t.Errorf("expected stored volumes:\n %v\n got: \n%v", test.expectedStoredVolumes, queuedVolumes)
+			}
+
+			// Check that every volume is really in the workqueue. It has no List() functionality, use NumRequeues
+			// as workaround.
+			for _, volume := range test.expectedStoredVolumes {
+				if queue.queue.NumRequeues(volume.Name) == 0 {
+					t.Errorf("Expected volume %q in workqueue, but it has zero NumRequeues", volume.Name)
+				}
+			}
 		}
 		close(stopCh)
 	}
