@@ -1062,12 +1062,12 @@ func (ctrl *ProvisionController) shouldProvision(claim *v1.PersistentVolumeClaim
 	} else {
 		// Kubernetes 1.4 provisioning, evaluating class.Provisioner
 		claimClass := util.GetPersistentVolumeClaimClass(claim)
-		provisioner, _, err := ctrl.getStorageClassFields(claimClass)
+		class, err := ctrl.getStorageClass(claimClass)
 		if err != nil {
 			glog.Errorf("Error getting claim %q's StorageClass's fields: %v", claimToClaimKey(claim), err)
 			return false, err
 		}
-		if provisioner != ctrl.provisionerName {
+		if class.Provisioner != ctrl.provisionerName {
 			return false, nil
 		}
 
@@ -1200,34 +1200,26 @@ func (ctrl *ProvisionController) provisionClaimOperation(claim *v1.PersistentVol
 
 	// For any issues getting fields from StorageClass (including reclaimPolicy & mountOptions),
 	// retry the claim because the storageClass can be fixed/(re)created independently of the claim
-	provisioner, parameters, err := ctrl.getStorageClassFields(claimClass)
+	class, err := ctrl.getStorageClass(claimClass)
 	if err != nil {
 		glog.Error(logOperation(operation, "error getting claim's StorageClass's fields: %v", err))
 		return ProvisioningFinished, err
 	}
-	if !ctrl.knownProvisioner(provisioner) {
+	if !ctrl.knownProvisioner(class.Provisioner) {
 		// class.Provisioner has either changed since shouldProvision() or
 		// annDynamicallyProvisioned contains different provisioner than
 		// class.Provisioner.
-		glog.Error(logOperation(operation, "unknown provisioner %q requested in claim's StorageClass", provisioner))
+		glog.Error(logOperation(operation, "unknown provisioner %q requested in claim's StorageClass", class.Provisioner))
 		return ProvisioningFinished, nil
 	}
 
 	reclaimPolicy := v1.PersistentVolumeReclaimDelete
 	if ctrl.kubeVersion.AtLeast(utilversion.MustParseSemantic("v1.8.0")) {
-		reclaimPolicy, err = ctrl.fetchReclaimPolicy(claimClass)
-		if err != nil {
-			return ProvisioningFinished, err
-		}
+		reclaimPolicy = *class.ReclaimPolicy
 	}
-
-	mountOptions, err := ctrl.fetchMountOptions(claimClass)
-	if err != nil {
-		return ProvisioningFinished, err
-	}
+	mountOptions := class.MountOptions
 
 	var selectedNode *v1.Node
-	var allowedTopologies []v1.TopologySelectorTerm
 	if ctrl.kubeVersion.AtLeast(utilversion.MustParseSemantic("v1.11.0")) {
 		// Get SelectedNode
 		if nodeName, ok := claim.Annotations[annSelectedNode]; ok {
@@ -1238,14 +1230,6 @@ func (ctrl *ProvisionController) provisionClaimOperation(claim *v1.PersistentVol
 				return ProvisioningNoChange, err
 			}
 		}
-
-		// Get AllowedTopologies
-		allowedTopologies, err = ctrl.fetchAllowedTopologies(claimClass)
-		if err != nil {
-			err = fmt.Errorf("failed to get AllowedTopologies from StorageClass: %v", err)
-			ctrl.eventRecorder.Event(claim, v1.EventTypeWarning, "ProvisioningFailed", err.Error())
-			return ProvisioningNoChange, err
-		}
 	}
 
 	options := VolumeOptions{
@@ -1253,9 +1237,9 @@ func (ctrl *ProvisionController) provisionClaimOperation(claim *v1.PersistentVol
 		PVName:                        pvName,
 		PVC:                           claim,
 		MountOptions:                  mountOptions,
-		Parameters:                    parameters,
+		Parameters:                    class.Parameters,
 		SelectedNode:                  selectedNode,
-		AllowedTopologies:             allowedTopologies,
+		AllowedTopologies:             class.AllowedTopologies,
 	}
 
 	ctrl.eventRecorder.Event(claim, v1.EventTypeNormal, "Provisioning", fmt.Sprintf("External provisioner is provisioning volume for claim %q", claimToClaimKey(claim)))
@@ -1411,86 +1395,36 @@ func (ctrl *ProvisionController) getProvisionedVolumeNameForClaim(claim *v1.Pers
 	return "pvc-" + string(claim.UID)
 }
 
-func (ctrl *ProvisionController) getStorageClassFields(name string) (string, map[string]string, error) {
+// getStorageClass retrives storage class object by name.
+func (ctrl *ProvisionController) getStorageClass(name string) (*storage.StorageClass, error) {
 	classObj, found, err := ctrl.classes.GetByKey(name)
 	if err != nil {
-		return "", nil, err
+		return nil, err
 	}
 	if !found {
-		return "", nil, fmt.Errorf("storageClass %q not found", name)
-		// 3. It tries to find a StorageClass instance referenced by annotation
-		//    `claim.Annotations["volume.beta.kubernetes.io/storage-class"]`. If not
-		//    found, it SHOULD report an error (by sending an event to the claim) and it
-		//    SHOULD retry periodically with step i.
+		return nil, fmt.Errorf("storageClass %q not found", name)
 	}
 	switch class := classObj.(type) {
 	case *storage.StorageClass:
-		return class.Provisioner, class.Parameters, nil
+		return class, nil
 	case *storagebeta.StorageClass:
-		return class.Provisioner, class.Parameters, nil
+		// convert storagebeta.StorageClass to storage.StorageClass
+		return &storage.StorageClass{
+			ObjectMeta:           class.ObjectMeta,
+			Provisioner:          class.Provisioner,
+			Parameters:           class.Parameters,
+			ReclaimPolicy:        class.ReclaimPolicy,
+			MountOptions:         class.MountOptions,
+			AllowVolumeExpansion: class.AllowVolumeExpansion,
+			VolumeBindingMode:    (*storage.VolumeBindingMode)(class.VolumeBindingMode),
+			AllowedTopologies:    class.AllowedTopologies,
+		}, nil
 	}
-	return "", nil, fmt.Errorf("cannot convert object to StorageClass: %+v", classObj)
+	return nil, fmt.Errorf("cannot convert object to StorageClass: %+v", classObj)
 }
 
 func claimToClaimKey(claim *v1.PersistentVolumeClaim) string {
 	return fmt.Sprintf("%s/%s", claim.Namespace, claim.Name)
-}
-
-func (ctrl *ProvisionController) fetchReclaimPolicy(storageClassName string) (v1.PersistentVolumeReclaimPolicy, error) {
-	classObj, found, err := ctrl.classes.GetByKey(storageClassName)
-	if err != nil {
-		return "", err
-	}
-	if !found {
-		return "", fmt.Errorf("storageClass %q not found", storageClassName)
-	}
-
-	switch class := classObj.(type) {
-	case *storage.StorageClass:
-		return *class.ReclaimPolicy, nil
-	case *storagebeta.StorageClass:
-		return *class.ReclaimPolicy, nil
-	}
-
-	return v1.PersistentVolumeReclaimDelete, fmt.Errorf("cannot convert object to StorageClass: %+v", classObj)
-}
-
-func (ctrl *ProvisionController) fetchMountOptions(storageClassName string) ([]string, error) {
-	classObj, found, err := ctrl.classes.GetByKey(storageClassName)
-	if err != nil {
-		return nil, err
-	}
-	if !found {
-		return nil, fmt.Errorf("storageClass %q not found", storageClassName)
-	}
-
-	switch class := classObj.(type) {
-	case *storage.StorageClass:
-		return class.MountOptions, nil
-	case *storagebeta.StorageClass:
-		return class.MountOptions, nil
-	}
-
-	return nil, fmt.Errorf("cannot convert object to StorageClass: %+v", classObj)
-}
-
-func (ctrl *ProvisionController) fetchAllowedTopologies(storageClassName string) ([]v1.TopologySelectorTerm, error) {
-	classObj, found, err := ctrl.classes.GetByKey(storageClassName)
-	if err != nil {
-		return nil, err
-	}
-	if !found {
-		return nil, fmt.Errorf("storageClass %q not found", storageClassName)
-	}
-
-	switch class := classObj.(type) {
-	case *storage.StorageClass:
-		return class.AllowedTopologies, nil
-	case *storagebeta.StorageClass:
-		return class.AllowedTopologies, nil
-	}
-
-	return nil, fmt.Errorf("cannot convert object to StorageClass: %+v", classObj)
 }
 
 // supportsBlock returns whether a provisioner supports block volume.
