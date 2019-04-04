@@ -27,11 +27,11 @@
 
 [[constraint]]
   branch = "master"
-  name = "github.com/golang/glog"
+  name = "k8s.io/klog"
 
 [[constraint]]
   branch = "master"
-  name = "github.com/kubernetes-sigs/sig-storage-lib-external-provisioner"
+  name = "sigs.k8s.io/sig-storage-lib-external-provisioner"
 
 [[constraint]]
   branch = "master"
