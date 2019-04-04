@@ -38,15 +38,15 @@
   name = "golang.org/x/time"
 
 [[constraint]]
-  branch = "master"
+  branch = "release-1.14"
   name = "k8s.io/api"
 
 [[constraint]]
-  branch = "master"
+  branch = "release-1.14"
   name = "k8s.io/apimachinery"
 
 [[constraint]]
-  branch = "master"
+  branch = "release-11.0"
   name = "k8s.io/client-go"
 
 [prune]
