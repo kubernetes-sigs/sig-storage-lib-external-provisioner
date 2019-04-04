@@ -564,6 +564,7 @@ func TestShouldProvision(t *testing.T) {
 		claim                      *v1.PersistentVolumeClaim
 		serverGitVersion           string
 		expectedShould             bool
+		expectedError              bool
 	}{
 		{
 			name:            "should provision based on provisionerName",
@@ -646,6 +647,28 @@ func TestShouldProvision(t *testing.T) {
 			serverGitVersion: "v1.4.0",
 			expectedShould:   true,
 		},
+		// Kubernetes 1.4 provisioning - need StorageClass.provisioner but it DNE
+		{
+			name:             "should error, need to read storage class and it DNE (none exist)",
+			provisionerName:  "foo.bar/baz",
+			provisioner:      newTestProvisioner(),
+			class:            nil,
+			claim:            newClaim("claim-1", "1-1", "class-1", "", "", nil),
+			serverGitVersion: "v1.4.0",
+			expectedShould:   false,
+			expectedError:    true,
+		},
+		// Kubernetes 1.4 provisioning - need StorageClass.provisioner but it DNE
+		{
+			name:             "should error, need to read storage class and it DNE (one exists with different name)",
+			provisionerName:  "foo.bar/baz",
+			provisioner:      newTestProvisioner(),
+			class:            newBetaStorageClass("class-2", "foo.bar/baz"),
+			claim:            newClaim("claim-1", "1-1", "class-1", "", "", nil),
+			serverGitVersion: "v1.4.0",
+			expectedShould:   false,
+			expectedError:    true,
+		},
 		{
 			name:            "qualifier says no",
 			provisionerName: "foo.bar/baz",
@@ -677,16 +700,22 @@ func TestShouldProvision(t *testing.T) {
 			ctrl = newTestProvisionControllerWithAdditionalNames(client, test.provisionerName, test.provisioner, serverVersion, test.additionalProvisionerNames)
 		}
 
-		err := ctrl.classes.Add(test.class)
-		if err != nil {
-			t.Logf("test case: %s", test.name)
-			t.Errorf("error adding class %v to cache: %v", test.class, err)
+		if test.class != nil {
+			err := ctrl.classes.Add(test.class)
+			if err != nil {
+				t.Logf("test case: %s", test.name)
+				t.Errorf("error adding class %v to cache: %v", test.class, err)
+			}
 		}
 
-		should := ctrl.shouldProvision(test.claim)
+		should, err := ctrl.shouldProvision(test.claim)
 		if test.expectedShould != should {
 			t.Logf("test case: %s", test.name)
 			t.Errorf("expected should provision %v but got %v\n", test.expectedShould, should)
+		}
+		if (err != nil && test.expectedError == false) || (err == nil && test.expectedError == true) {
+			t.Logf("test case: %s", test.name)
+			t.Errorf("expected error %v but got %v\n", test.expectedError, err)
 		}
 	}
 }

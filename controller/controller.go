@@ -994,7 +994,10 @@ func (ctrl *ProvisionController) syncClaim(obj interface{}) (ProvisioningState, 
 		return ProvisioningFinished, fmt.Errorf("expected claim but got %+v", obj)
 	}
 
-	if ctrl.shouldProvision(claim) {
+	should, err := ctrl.shouldProvision(claim)
+	if err != nil {
+		return ProvisioningFinished, err
+	} else if should {
 		startTime := time.Now()
 
 		var status ProvisioningState
@@ -1038,14 +1041,14 @@ func (ctrl *ProvisionController) knownProvisioner(provisioner string) bool {
 
 // shouldProvision returns whether a claim should have a volume provisioned for
 // it, i.e. whether a Provision is "desired"
-func (ctrl *ProvisionController) shouldProvision(claim *v1.PersistentVolumeClaim) bool {
+func (ctrl *ProvisionController) shouldProvision(claim *v1.PersistentVolumeClaim) (bool, error) {
 	if claim.Spec.VolumeName != "" {
-		return false
+		return false, nil
 	}
 
 	if qualifier, ok := ctrl.provisioner.(Qualifier); ok {
 		if !qualifier.ShouldProvision(claim) {
-			return false
+			return false, nil
 		}
 	}
 
@@ -1053,7 +1056,7 @@ func (ctrl *ProvisionController) shouldProvision(claim *v1.PersistentVolumeClaim
 	if ctrl.kubeVersion.AtLeast(utilversion.MustParseSemantic("v1.5.0")) {
 		if provisioner, found := claim.Annotations[annStorageProvisioner]; found {
 			if ctrl.knownProvisioner(provisioner) {
-				return true
+				return true, nil
 			}
 		}
 	} else {
@@ -1062,16 +1065,16 @@ func (ctrl *ProvisionController) shouldProvision(claim *v1.PersistentVolumeClaim
 		provisioner, _, err := ctrl.getStorageClassFields(claimClass)
 		if err != nil {
 			glog.Errorf("Error getting claim %q's StorageClass's fields: %v", claimToClaimKey(claim), err)
-			return false
+			return false, err
 		}
 		if provisioner != ctrl.provisionerName {
-			return false
+			return false, nil
 		}
 
-		return true
+		return true, nil
 	}
 
-	return false
+	return false, nil
 }
 
 // shouldDelete returns whether a volume should have its backing volume
@@ -1188,23 +1191,25 @@ func (ctrl *ProvisionController) provisionClaimOperation(claim *v1.PersistentVol
 		return ProvisioningNoChange, nil
 	}
 
+	// Check if this provisioner can provision this claim.
+	if err = ctrl.canProvision(claim); err != nil {
+		ctrl.eventRecorder.Event(claim, v1.EventTypeWarning, "ProvisioningFailed", err.Error())
+		glog.Error(logOperation(operation, "failed to provision volume: %v", err))
+		return ProvisioningFinished, nil
+	}
+
+	// For any issues getting fields from StorageClass (including reclaimPolicy & mountOptions),
+	// retry the claim because the storageClass can be fixed/(re)created independently of the claim
 	provisioner, parameters, err := ctrl.getStorageClassFields(claimClass)
 	if err != nil {
 		glog.Error(logOperation(operation, "error getting claim's StorageClass's fields: %v", err))
-		return ProvisioningFinished, nil
+		return ProvisioningFinished, err
 	}
 	if !ctrl.knownProvisioner(provisioner) {
 		// class.Provisioner has either changed since shouldProvision() or
 		// annDynamicallyProvisioned contains different provisioner than
 		// class.Provisioner.
 		glog.Error(logOperation(operation, "unknown provisioner %q requested in claim's StorageClass", provisioner))
-		return ProvisioningFinished, nil
-	}
-
-	// Check if this provisioner can provision this claim.
-	if err = ctrl.canProvision(claim); err != nil {
-		ctrl.eventRecorder.Event(claim, v1.EventTypeWarning, "ProvisioningFailed", err.Error())
-		glog.Error(logOperation(operation, "failed to provision volume: %v", err))
 		return ProvisioningFinished, nil
 	}
 
