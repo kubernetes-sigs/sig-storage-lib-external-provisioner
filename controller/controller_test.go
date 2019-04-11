@@ -1201,7 +1201,8 @@ func constructProvisionedVolumeWithoutStorageClassInfo(claim *v1.PersistentVolum
 	// TODO implement options.ProvisionerSelector parsing
 	// pv.Labels MUST be set to match claim.spec.selector. The provisioner MAY add additional labels.
 
-	volume.ObjectMeta.Finalizers = append(volume.ObjectMeta.Finalizers, finalizerPV)
+	// TODO addFinalizer is false by default
+	// volume.ObjectMeta.Finalizers = append(volume.ObjectMeta.Finalizers, finalizerPV)
 
 	return volume
 }
