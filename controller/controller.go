@@ -151,6 +151,11 @@ type ProvisionController struct {
 	// The path of metrics endpoint path.
 	metricsPath string
 
+	// Whether to add a finalizer marking the provisioner as the owner of the PV
+	// with clean up duty.
+	// TODO: upstream and we may have a race b/w applying reclaim policy and not if pv has protection finalizer
+	addFinalizer bool
+
 	// Whether to do kubernetes leader election at all. It should basically
 	// always be done when possible to avoid duplicate Provision attempts.
 	leaderElection          bool
@@ -196,6 +201,8 @@ const (
 	DefaultMetricsAddress = "0.0.0.0"
 	// DefaultMetricsPath is used when option function MetricsPath is omitted
 	DefaultMetricsPath = "/metrics"
+	// DefaultAddFinalizer is used when option function AddFinalizer is omitted
+	DefaultAddFinalizer = false
 )
 
 var errRuntime = fmt.Errorf("cannot call option functions after controller has Run")
@@ -516,6 +523,19 @@ func AdditionalProvisionerNames(additionalProvisionerNames []string) func(*Provi
 	}
 }
 
+// AddFinalizer determines whether to add a finalizer marking the provisioner
+// as the owner of the PV with clean up duty. A PV having the finalizer means
+// the provisioner wants to keep it around so that it can reclaim it.
+func AddFinalizer(addFinalizer bool) func(*ProvisionController) error {
+	return func(c *ProvisionController) error {
+		if c.HasRun() {
+			return errRuntime
+		}
+		c.addFinalizer = addFinalizer
+		return nil
+	}
+}
+
 // HasRun returns whether the controller has Run
 func (ctrl *ProvisionController) HasRun() bool {
 	ctrl.hasRunLock.Lock()
@@ -567,6 +587,7 @@ func NewProvisionController(
 		metricsPort:               DefaultMetricsPort,
 		metricsAddress:            DefaultMetricsAddress,
 		metricsPath:               DefaultMetricsPath,
+		addFinalizer:              DefaultAddFinalizer,
 		hasRun:                    false,
 		hasRunLock:                &sync.Mutex{},
 	}
@@ -1089,7 +1110,9 @@ func (ctrl *ProvisionController) shouldDelete(volume *v1.PersistentVolume) bool 
 	// In 1.9+ PV protection means the object will exist briefly with a
 	// deletion timestamp even after our successful Delete. Ignore it.
 	if ctrl.kubeVersion.AtLeast(utilversion.MustParseSemantic("v1.9.0")) {
-		if !ctrl.checkFinalizer(volume, finalizerPV) && volume.ObjectMeta.DeletionTimestamp != nil {
+		if ctrl.addFinalizer && !ctrl.checkFinalizer(volume, finalizerPV) && volume.ObjectMeta.DeletionTimestamp != nil {
+			return false
+		} else if volume.ObjectMeta.DeletionTimestamp != nil {
 			return false
 		}
 	}
@@ -1283,7 +1306,7 @@ func (ctrl *ProvisionController) provisionClaimOperation(claim *v1.PersistentVol
 	volume.Spec.ClaimRef = claimRef
 
 	// Add external provisioner finalizer if it doesn't already have it
-	if !ctrl.checkFinalizer(volume, finalizerPV) {
+	if ctrl.addFinalizer && !ctrl.checkFinalizer(volume, finalizerPV) {
 		volume.ObjectMeta.Finalizers = append(volume.ObjectMeta.Finalizers, finalizerPV)
 	}
 
@@ -1345,35 +1368,37 @@ func (ctrl *ProvisionController) deleteVolumeOperation(volume *v1.PersistentVolu
 		return err
 	}
 
-	if len(newVolume.ObjectMeta.Finalizers) > 0 {
-		// Remove external-provisioner finalizer
+	if ctrl.addFinalizer {
+		if len(newVolume.ObjectMeta.Finalizers) > 0 {
+			// Remove external-provisioner finalizer
 
-		// need to get the pv again because the delete has updated the object with a deletion timestamp
-		newVolume, err := ctrl.client.CoreV1().PersistentVolumes().Get(volume.Name, metav1.GetOptions{})
-		if err != nil {
-			// If the volume is not found return, otherwise error
-			if !apierrs.IsNotFound(err) {
-				glog.Info(logOperation(operation, "failed to get persistentvolume to update finalizer: %v", err))
-				return err
-			}
-			return nil
-		}
-		finalizers := make([]string, 0)
-		for _, finalizer := range newVolume.ObjectMeta.Finalizers {
-			if finalizer != finalizerPV {
-				finalizers = append(finalizers, finalizer)
-			}
-		}
-
-		// Only update the finalizers if we actually removed something
-		if len(finalizers) != len(newVolume.ObjectMeta.Finalizers) {
-			newVolume.ObjectMeta.Finalizers = finalizers
-			if _, err = ctrl.client.CoreV1().PersistentVolumes().Update(newVolume); err != nil {
+			// need to get the pv again because the delete has updated the object with a deletion timestamp
+			newVolume, err := ctrl.client.CoreV1().PersistentVolumes().Get(volume.Name, metav1.GetOptions{})
+			if err != nil {
+				// If the volume is not found return, otherwise error
 				if !apierrs.IsNotFound(err) {
-					// Couldn't remove finalizer and the object still exists, the controller may
-					// try to remove the finalizer again on the next update
-					glog.Info(logOperation(operation, "failed to remove finalizer for persistentvolume: %v", err))
+					glog.Info(logOperation(operation, "failed to get persistentvolume to update finalizer: %v", err))
 					return err
+				}
+				return nil
+			}
+			finalizers := make([]string, 0)
+			for _, finalizer := range newVolume.ObjectMeta.Finalizers {
+				if finalizer != finalizerPV {
+					finalizers = append(finalizers, finalizer)
+				}
+			}
+
+			// Only update the finalizers if we actually removed something
+			if len(finalizers) != len(newVolume.ObjectMeta.Finalizers) {
+				newVolume.ObjectMeta.Finalizers = finalizers
+				if _, err = ctrl.client.CoreV1().PersistentVolumes().Update(newVolume); err != nil {
+					if !apierrs.IsNotFound(err) {
+						// Couldn't remove finalizer and the object still exists, the controller may
+						// try to remove the finalizer again on the next update
+						glog.Info(logOperation(operation, "failed to remove finalizer for persistentvolume: %v", err))
+						return err
+					}
 				}
 			}
 		}
