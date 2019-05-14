@@ -20,6 +20,7 @@ import (
 	"fmt"
 
 	"k8s.io/api/core/v1"
+	storageapis "k8s.io/api/storage/v1"
 )
 
 // Provisioner is an interface that creates templates for PersistentVolumes
@@ -29,7 +30,7 @@ import (
 type Provisioner interface {
 	// Provision creates a volume i.e. the storage asset and returns a PV object
 	// for the volume
-	Provision(VolumeOptions) (*v1.PersistentVolume, error)
+	Provision(ProvisionOptions) (*v1.PersistentVolume, error)
 	// Delete removes the storage asset that was created by Provision backing the
 	// given PV. Does not delete the PV object itself.
 	//
@@ -73,7 +74,7 @@ type ProvisionerExt interface {
 	// provisioning the volume. The provisioner must return either final error (with
 	// ProvisioningFinished) or success eventually, otherwise the controller will try
 	// forever (unless FailedProvisionThreshold is set).
-	ProvisionExt(options VolumeOptions) (*v1.PersistentVolume, ProvisioningState, error)
+	ProvisionExt(options ProvisionOptions) (*v1.PersistentVolume, ProvisioningState, error)
 }
 
 // ProvisioningState is state of volume provisioning. It tells the controller if
@@ -111,28 +112,22 @@ func (e *IgnoredError) Error() string {
 	return fmt.Sprintf("ignored because %s", e.Reason)
 }
 
-// VolumeOptions contains option information about a volume
-// https://github.com/kubernetes/kubernetes/blob/release-1.4/pkg/volume/plugins.go
-type VolumeOptions struct {
-	// Reclamation policy for a persistent volume
-	PersistentVolumeReclaimPolicy v1.PersistentVolumeReclaimPolicy
+// ProvisionOptions contains all information required to provision a volume
+type ProvisionOptions struct {
+	// StorageClass is a reference to the storage class that is used for
+	// provisioning for this volume
+	StorageClass *storageapis.StorageClass
+
 	// PV.Name of the appropriate PersistentVolume. Used to generate cloud
 	// volume name.
 	PVName string
-
-	// PV mount options. Not validated - mount of the PVs will simply fail if one is invalid.
-	MountOptions []string
 
 	// PVC is reference to the claim that lead to provisioning of a new PV.
 	// Provisioners *must* create a PV that would be matched by this PVC,
 	// i.e. with required capacity, accessMode, labels matching PVC.Selector and
 	// so on.
 	PVC *v1.PersistentVolumeClaim
-	// Volume provisioning parameters from StorageClass
-	Parameters map[string]string
 
 	// Node selected by the scheduler for the volume.
 	SelectedNode *v1.Node
-	// Topology constraint parameter from StorageClass
-	AllowedTopologies []v1.TopologySelectorTerm
 }

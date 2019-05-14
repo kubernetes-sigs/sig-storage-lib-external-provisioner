@@ -63,11 +63,11 @@ func New(client kubernetes.Interface) Allocator {
 	}
 }
 
-// AllocateNext allocates the next available GID for the given VolumeOptions
+// AllocateNext allocates the next available GID for the given ProvisionOptions
 // (claim's options for a volume it wants) from the appropriate GID table.
-func (a *Allocator) AllocateNext(options controller.VolumeOptions) (int, error) {
+func (a *Allocator) AllocateNext(options controller.ProvisionOptions) (int, error) {
 	class := util.GetPersistentVolumeClaimClass(options.PVC)
-	gidMin, gidMax, err := parseClassParameters(options.Parameters)
+	gidMin, gidMax, err := parseClassParameters(options.StorageClass.Parameters)
 	if err != nil {
 		return 0, err
 	}
