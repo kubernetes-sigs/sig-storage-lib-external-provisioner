@@ -1187,10 +1187,12 @@ func newProvisionedVolumeWithSpecifiedReclaimPolicy(storageClass *storage.Storag
 
 func constructProvisionedVolumeWithoutStorageClassInfo(claim *v1.PersistentVolumeClaim, reclaimPolicy v1.PersistentVolumeReclaimPolicy) *v1.PersistentVolume {
 	// pv.Spec MUST be set to match requirements in claim.Spec, especially access mode and PV size. The provisioned volume size MUST NOT be smaller than size requested in the claim, however it MAY be larger.
-	options := VolumeOptions{
-		PersistentVolumeReclaimPolicy: reclaimPolicy,
-		PVName:                        "pvc-" + string(claim.ObjectMeta.UID),
-		PVC:                           claim,
+	options := ProvisionOptions{
+		StorageClass: &storage.StorageClass{
+			ReclaimPolicy: &reclaimPolicy,
+		},
+		PVName: "pvc-" + string(claim.ObjectMeta.UID),
+		PVC:    claim,
 	}
 	volume, _ := newTestProvisioner().Provision(options)
 
@@ -1262,10 +1264,10 @@ func (p *testBlockProvisioner) SupportsBlock() bool {
 	return p.answer
 }
 
-func (p *testProvisioner) Provision(options VolumeOptions) (*v1.PersistentVolume, error) {
+func (p *testProvisioner) Provision(options ProvisionOptions) (*v1.PersistentVolume, error) {
 	p.provisionCalls <- provisionParams{
 		selectedNode:      options.SelectedNode,
-		allowedTopologies: options.AllowedTopologies,
+		allowedTopologies: options.StorageClass.AllowedTopologies,
 	}
 
 	// Sleep to simulate work done by Provision...for long enough that
@@ -1280,7 +1282,7 @@ func (p *testProvisioner) Provision(options VolumeOptions) (*v1.PersistentVolume
 			Name: options.PVName,
 		},
 		Spec: v1.PersistentVolumeSpec{
-			PersistentVolumeReclaimPolicy: options.PersistentVolumeReclaimPolicy,
+			PersistentVolumeReclaimPolicy: *options.StorageClass.ReclaimPolicy,
 			AccessModes:                   options.PVC.Spec.AccessModes,
 			Capacity: v1.ResourceList{
 				v1.ResourceName(v1.ResourceStorage): options.PVC.Spec.Resources.Requests[v1.ResourceName(v1.ResourceStorage)],
@@ -1311,7 +1313,7 @@ type badTestProvisioner struct {
 
 var _ Provisioner = &badTestProvisioner{}
 
-func (p *badTestProvisioner) Provision(options VolumeOptions) (*v1.PersistentVolume, error) {
+func (p *badTestProvisioner) Provision(options ProvisionOptions) (*v1.PersistentVolume, error) {
 	return nil, errors.New("fake error")
 }
 
@@ -1328,7 +1330,7 @@ type ignoredProvisioner struct {
 
 var _ Provisioner = &ignoredProvisioner{}
 
-func (i *ignoredProvisioner) Provision(options VolumeOptions) (*v1.PersistentVolume, error) {
+func (i *ignoredProvisioner) Provision(options ProvisionOptions) (*v1.PersistentVolume, error) {
 	if options.PVC.Name == "claim-2" {
 		return nil, &IgnoredError{"Ignored"}
 	}
@@ -1359,7 +1361,7 @@ type extProvisioner struct {
 var _ Provisioner = &extProvisioner{}
 var _ ProvisionerExt = &extProvisioner{}
 
-func (m *extProvisioner) Provision(VolumeOptions) (*v1.PersistentVolume, error) {
+func (m *extProvisioner) Provision(ProvisionOptions) (*v1.PersistentVolume, error) {
 	return nil, fmt.Errorf("Not implemented")
 }
 
@@ -1368,7 +1370,7 @@ func (m *extProvisioner) Delete(pv *v1.PersistentVolume) error {
 
 }
 
-func (m *extProvisioner) ProvisionExt(options VolumeOptions) (*v1.PersistentVolume, ProvisioningState, error) {
+func (m *extProvisioner) ProvisionExt(options ProvisionOptions) (*v1.PersistentVolume, ProvisioningState, error) {
 	if m.pvName != options.PVName {
 		m.t.Errorf("Invalid provision call, expected name %q, got %q", m.pvName, options.PVName)
 		return nil, ProvisioningFinished, fmt.Errorf("Invalid provision call, expected name %q, got %q", m.pvName, options.PVName)
@@ -1381,7 +1383,7 @@ func (m *extProvisioner) ProvisionExt(options VolumeOptions) (*v1.PersistentVolu
 				Name: options.PVName,
 			},
 			Spec: v1.PersistentVolumeSpec{
-				PersistentVolumeReclaimPolicy: options.PersistentVolumeReclaimPolicy,
+				PersistentVolumeReclaimPolicy: *options.StorageClass.ReclaimPolicy,
 				AccessModes:                   options.PVC.Spec.AccessModes,
 				Capacity: v1.ResourceList{
 					v1.ResourceName(v1.ResourceStorage): options.PVC.Spec.Resources.Requests[v1.ResourceName(v1.ResourceStorage)],

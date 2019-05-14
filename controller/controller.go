@@ -1236,12 +1236,6 @@ func (ctrl *ProvisionController) provisionClaimOperation(claim *v1.PersistentVol
 		return ProvisioningFinished, nil
 	}
 
-	reclaimPolicy := v1.PersistentVolumeReclaimDelete
-	if ctrl.kubeVersion.AtLeast(utilversion.MustParseSemantic("v1.8.0")) {
-		reclaimPolicy = *class.ReclaimPolicy
-	}
-	mountOptions := class.MountOptions
-
 	var selectedNode *v1.Node
 	if ctrl.kubeVersion.AtLeast(utilversion.MustParseSemantic("v1.11.0")) {
 		// Get SelectedNode
@@ -1255,14 +1249,11 @@ func (ctrl *ProvisionController) provisionClaimOperation(claim *v1.PersistentVol
 		}
 	}
 
-	options := VolumeOptions{
-		PersistentVolumeReclaimPolicy: reclaimPolicy,
-		PVName:                        pvName,
-		PVC:                           claim,
-		MountOptions:                  mountOptions,
-		Parameters:                    class.Parameters,
-		SelectedNode:                  selectedNode,
-		AllowedTopologies:             class.AllowedTopologies,
+	options := ProvisionOptions{
+		StorageClass: class,
+		PVName:       pvName,
+		PVC:          claim,
+		SelectedNode: selectedNode,
 	}
 
 	ctrl.eventRecorder.Event(claim, v1.EventTypeNormal, "Provisioning", fmt.Sprintf("External provisioner is provisioning volume for claim %q", claimToClaimKey(claim)))
