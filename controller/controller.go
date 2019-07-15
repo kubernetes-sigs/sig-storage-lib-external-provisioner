@@ -71,6 +71,10 @@ const annClass = "volume.beta.kubernetes.io/storage-class"
 // recognize dynamically provisioned PVs in its decisions).
 const annDynamicallyProvisioned = "pv.kubernetes.io/provisioned-by"
 
+// if annotation: pv.kubernetes.io/bind-completed configured already, it means
+// the pvc is in bound or lost status;
+const annBindCompleted = "pv.kubernetes.io/bind-completed"
+
 const annStorageProvisioner = "volume.beta.kubernetes.io/storage-provisioner"
 
 // This annotation is added to a PVC that has been triggered by scheduler to
@@ -1064,6 +1068,11 @@ func (ctrl *ProvisionController) knownProvisioner(provisioner string) bool {
 // it, i.e. whether a Provision is "desired"
 func (ctrl *ProvisionController) shouldProvision(claim *v1.PersistentVolumeClaim) (bool, error) {
 	if claim.Spec.VolumeName != "" {
+		return false, nil
+	}
+
+	// pvc is consider bound if annotations:pv.kubernetes.io/bind-completed is set
+	if metav1.HasAnnotation(claim.ObjectMeta, annBindCompleted) {
 		return false, nil
 	}
 
