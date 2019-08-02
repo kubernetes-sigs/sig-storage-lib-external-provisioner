@@ -617,29 +617,6 @@ func NewProvisionController(
 	controller.claimQueue = workqueue.NewNamedRateLimitingQueue(rateLimiter, "claims")
 	controller.volumeQueue = workqueue.NewNamedRateLimitingQueue(rateLimiter, "volumes")
 
-	if controller.createProvisionerPVLimiter != nil {
-		glog.V(2).Infof("Using saving PVs to API server in background")
-		controller.volumeStore = NewVolumeStoreQueue(client, controller.createProvisionerPVLimiter)
-	} else {
-		if controller.createProvisionedPVBackoff == nil {
-			// Use linear backoff with createProvisionedPVInterval and createProvisionedPVRetryCount by default.
-			if controller.createProvisionedPVInterval == 0 {
-				controller.createProvisionedPVInterval = DefaultCreateProvisionedPVInterval
-			}
-			if controller.createProvisionedPVRetryCount == 0 {
-				controller.createProvisionedPVRetryCount = DefaultCreateProvisionedPVRetryCount
-			}
-			controller.createProvisionedPVBackoff = &wait.Backoff{
-				Duration: controller.createProvisionedPVInterval,
-				Factor:   1, // linear backoff
-				Steps:    controller.createProvisionedPVRetryCount,
-				//Cap:      controller.createProvisionedPVInterval,
-			}
-		}
-		glog.V(2).Infof("Using blocking saving PVs to API server")
-		controller.volumeStore = NewBackoffStore(client, controller.eventRecorder, controller.createProvisionedPVBackoff, controller)
-	}
-
 	informer := informers.NewSharedInformerFactory(client, controller.resyncPeriod)
 
 	// ----------------------
@@ -698,6 +675,30 @@ func NewProvisionController(
 		}
 	}
 	controller.classes = controller.classInformer.GetStore()
+
+	if controller.createProvisionerPVLimiter != nil {
+		glog.V(2).Infof("Using saving PVs to API server in background")
+		controller.volumeStore = NewVolumeStoreQueue(client, controller.createProvisionerPVLimiter, controller.claimsIndexer, controller.eventRecorder)
+	} else {
+		if controller.createProvisionedPVBackoff == nil {
+			// Use linear backoff with createProvisionedPVInterval and createProvisionedPVRetryCount by default.
+			if controller.createProvisionedPVInterval == 0 {
+				controller.createProvisionedPVInterval = DefaultCreateProvisionedPVInterval
+			}
+			if controller.createProvisionedPVRetryCount == 0 {
+				controller.createProvisionedPVRetryCount = DefaultCreateProvisionedPVRetryCount
+			}
+			controller.createProvisionedPVBackoff = &wait.Backoff{
+				Duration: controller.createProvisionedPVInterval,
+				Factor:   1, // linear backoff
+				Steps:    controller.createProvisionedPVRetryCount,
+				//Cap:      controller.createProvisionedPVInterval,
+			}
+		}
+		glog.V(2).Infof("Using blocking saving PVs to API server")
+		controller.volumeStore = NewBackoffStore(client, controller.eventRecorder, controller.createProvisionedPVBackoff, controller)
+	}
+
 	return controller
 }
 

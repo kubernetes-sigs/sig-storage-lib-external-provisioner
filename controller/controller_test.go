@@ -394,7 +394,7 @@ func TestController(t *testing.T) {
 		}
 
 		if test.volumeQueueStore {
-			ctrl.volumeStore = NewVolumeStoreQueue(client, workqueue.DefaultItemBasedRateLimiter())
+			ctrl.volumeStore = NewVolumeStoreQueue(client, workqueue.DefaultItemBasedRateLimiter(), ctrl.claimsIndexer, ctrl.eventRecorder)
 		}
 
 		if test.enqueueClaim != nil {

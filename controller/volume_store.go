@@ -24,11 +24,12 @@ import (
 
 	"k8s.io/client-go/tools/record"
 
-	"k8s.io/api/core/v1"
+	v1 "k8s.io/api/core/v1"
 	apierrs "k8s.io/apimachinery/pkg/api/errors"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/util/workqueue"
 	"k8s.io/klog"
 )
@@ -56,8 +57,10 @@ type VolumeStore interface {
 // PVs to API server using a workqueue running in its own goroutine(s).
 // After failed save, volume is re-qeueued with exponential backoff.
 type queueStore struct {
-	client kubernetes.Interface
-	queue  workqueue.RateLimitingInterface
+	client        kubernetes.Interface
+	queue         workqueue.RateLimitingInterface
+	eventRecorder record.EventRecorder
+	claimsIndexer cache.Indexer
 
 	volumes sync.Map
 }
@@ -68,11 +71,15 @@ var _ VolumeStore = &queueStore{}
 func NewVolumeStoreQueue(
 	client kubernetes.Interface,
 	limiter workqueue.RateLimiter,
+	claimsIndexer cache.Indexer,
+	eventRecorder record.EventRecorder,
 ) VolumeStore {
 
 	return &queueStore{
-		client: client,
-		queue:  workqueue.NewNamedRateLimitingQueue(limiter, "unsavedpvs"),
+		client:        client,
+		queue:         workqueue.NewNamedRateLimitingQueue(limiter, "unsavedpvs"),
+		claimsIndexer: claimsIndexer,
+		eventRecorder: eventRecorder,
 	}
 }
 
@@ -148,9 +155,27 @@ func (q *queueStore) doSaveVolume(volume *v1.PersistentVolume) error {
 	_, err := q.client.CoreV1().PersistentVolumes().Create(volume)
 	if err == nil || apierrs.IsAlreadyExists(err) {
 		klog.V(5).Infof("Volume %s saved", volume.Name)
+		q.sendSuccessEvent(volume)
 		return nil
 	}
 	return fmt.Errorf("error saving volume %s: %s", volume.Name, err)
+}
+
+func (q *queueStore) sendSuccessEvent(volume *v1.PersistentVolume) {
+	claimObjs, err := q.claimsIndexer.ByIndex(uidIndex, string(volume.Spec.ClaimRef.UID))
+	if err != nil {
+		klog.V(2).Infof("Error sending event to claim %s: %s", volume.Spec.ClaimRef.UID, err)
+		return
+	}
+	if len(claimObjs) != 1 {
+		return
+	}
+	claim, ok := claimObjs[0].(*v1.PersistentVolumeClaim)
+	if !ok {
+		return
+	}
+	msg := fmt.Sprintf("Successfully provisioned volume %s", volume.Name)
+	q.eventRecorder.Event(claim, v1.EventTypeNormal, "ProvisioningSucceeded", msg)
 }
 
 // backoffStore is implementation of VolumeStore that blocks and tries to save
