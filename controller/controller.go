@@ -882,7 +882,7 @@ func (ctrl *ProvisionController) processNextClaimWorkItem() bool {
 			return fmt.Errorf("expected string in workqueue but got %#v", obj)
 		}
 
-		if _, err := ctrl.syncClaimHandler(key); err != nil {
+		if err := ctrl.syncClaimHandler(key); err != nil {
 			if ctrl.failedProvisionThreshold == 0 {
 				glog.Warningf("Retrying syncing claim %q, failure %v", key, ctrl.claimQueue.NumRequeues(obj))
 				ctrl.claimQueue.AddRateLimited(obj)
@@ -900,7 +900,8 @@ func (ctrl *ProvisionController) processNextClaimWorkItem() bool {
 		}
 
 		ctrl.claimQueue.Forget(obj)
-		glog.V(2).Infof("Provisioning succeeded, removing PVC %s from claims in progress", key)
+		// Silently remove the PVC from list of volumes in progress. The provisioning either succeeded
+		// or the PVC was ignored by this provisioner.
 		ctrl.claimsInProgress.Delete(key)
 		return nil
 	}(obj)
@@ -958,10 +959,10 @@ func (ctrl *ProvisionController) processNextVolumeWorkItem() bool {
 }
 
 // syncClaimHandler gets the claim from informer's cache then calls syncClaim
-func (ctrl *ProvisionController) syncClaimHandler(key string) (ProvisioningState, error) {
+func (ctrl *ProvisionController) syncClaimHandler(key string) error {
 	objs, err := ctrl.claimsIndexer.ByIndex(uidIndex, key)
 	if err != nil {
-		return ProvisioningFinished, err
+		return err
 	}
 	var claimObj interface{}
 	if len(objs) > 0 {
@@ -970,28 +971,11 @@ func (ctrl *ProvisionController) syncClaimHandler(key string) (ProvisioningState
 		obj, found := ctrl.claimsInProgress.Load(key)
 		if !found {
 			utilruntime.HandleError(fmt.Errorf("claim %q in work queue no longer exists", key))
-			return ProvisioningFinished, nil
+			return nil
 		}
 		claimObj = obj
 	}
-	status, err := ctrl.syncClaim(claimObj)
-	if err == nil || status == ProvisioningFinished {
-		// Provisioning is 100% finished / not in progress.
-		glog.V(2).Infof("Final error received, removing PVC %s from claims in progress", key)
-		ctrl.claimsInProgress.Delete(key)
-		return status, err
-	}
-	if status == ProvisioningInBackground {
-		// Provisioning is in progress in background.
-		glog.V(2).Infof("Temporary error received, adding PVC %s to claims in progress", key)
-		ctrl.claimsInProgress.Store(key, claimObj)
-	} else {
-		// status == ProvisioningNoChange.
-		// Don't change claimsInProgress:
-		// - the claim is already there if previous status was ProvisioningInBackground.
-		// - the claim is not there if if previous status was ProvisioningFinished.
-	}
-	return status, err
+	return ctrl.syncClaim(claimObj)
 }
 
 // syncVolumeHandler gets the volume from informer's cache then calls syncVolume
@@ -1010,25 +994,43 @@ func (ctrl *ProvisionController) syncVolumeHandler(key string) error {
 
 // syncClaim checks if the claim should have a volume provisioned for it and
 // provisions one if so.
-func (ctrl *ProvisionController) syncClaim(obj interface{}) (ProvisioningState, error) {
+func (ctrl *ProvisionController) syncClaim(obj interface{}) error {
 	claim, ok := obj.(*v1.PersistentVolumeClaim)
 	if !ok {
-		return ProvisioningFinished, fmt.Errorf("expected claim but got %+v", obj)
+		return fmt.Errorf("expected claim but got %+v", obj)
 	}
 
 	should, err := ctrl.shouldProvision(claim)
 	if err != nil {
-		return ProvisioningFinished, err
+		return err
 	} else if should {
 		startTime := time.Now()
 
-		var status ProvisioningState
-		var err error
-		status, err = ctrl.provisionClaimOperation(claim)
+		status, err := ctrl.provisionClaimOperation(claim)
 		ctrl.updateProvisionStats(claim, err, startTime)
-		return status, err
+		if err == nil || status == ProvisioningFinished {
+			// Provisioning is 100% finished / not in progress.
+			if err == nil {
+				glog.V(5).Infof("Claim processing succeeded, removing PVC %s from claims in progress", claim.UID)
+			} else {
+				glog.V(2).Infof("Final error received, removing PVC %s from claims in progress", claim.UID)
+			}
+			ctrl.claimsInProgress.Delete(string(claim.UID))
+			return err
+		}
+		if status == ProvisioningInBackground {
+			// Provisioning is in progress in background.
+			glog.V(2).Infof("Temporary error received, adding PVC %s to claims in progress", claim.UID)
+			ctrl.claimsInProgress.Store(string(claim.UID), claim)
+		} else {
+			// status == ProvisioningNoChange.
+			// Don't change claimsInProgress:
+			// - the claim is already there if previous status was ProvisioningInBackground.
+			// - the claim is not there if if previous status was ProvisioningFinished.
+		}
+		return err
 	}
-	return ProvisioningFinished, nil
+	return nil
 }
 
 // syncVolume checks if the volume should be deleted and deletes if so
