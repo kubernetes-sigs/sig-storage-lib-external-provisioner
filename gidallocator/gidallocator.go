@@ -89,6 +89,9 @@ func (a *Allocator) AllocateNext(options controller.ProvisionOptions) (int, erro
 // table.
 func (a *Allocator) Release(volume *v1.PersistentVolume) error {
 	class, err := a.client.StorageV1().StorageClasses().Get(util.GetPersistentVolumeClass(volume), metav1.GetOptions{})
+	if err != nil {
+		return fmt.Errorf("failed to get storageClass: %v", err)
+	}
 	gidMin, gidMax, err := parseClassParameters(class.Parameters)
 	if err != nil {
 		return err
