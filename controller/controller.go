@@ -71,6 +71,13 @@ const annClass = "volume.beta.kubernetes.io/storage-class"
 // recognize dynamically provisioned PVs in its decisions).
 const annDynamicallyProvisioned = "pv.kubernetes.io/provisioned-by"
 
+// AnnMigratedTo annotation is added to a PVC that is supposed to be
+// dynamically provisioned/deleted by by its corresponding CSI driver
+// through the CSIMigration feature flags. It allows external provisioners
+// to determine which PVs are considered migrated and safe to operate on for
+// Deletion.
+const annMigratedTo = "volume.beta.kubernetes.io/migrated-to"
+
 const annStorageProvisioner = "volume.beta.kubernetes.io/storage-provisioner"
 
 // This annotation is added to a PVC that has been triggered by scheduler to
@@ -1143,7 +1150,9 @@ func (ctrl *ProvisionController) shouldDelete(volume *v1.PersistentVolume) bool 
 		return false
 	}
 
-	if ann := volume.Annotations[annDynamicallyProvisioned]; ann != ctrl.provisionerName {
+	ann := volume.Annotations[annDynamicallyProvisioned]
+	migratedTo := volume.Annotations[annMigratedTo]
+	if ann != ctrl.provisionerName && migratedTo != ctrl.provisionerName {
 		return false
 	}
 

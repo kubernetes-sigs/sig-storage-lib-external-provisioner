@@ -787,6 +787,30 @@ func TestShouldDelete(t *testing.T) {
 			serverGitVersion: "v1.9.0",
 			expectedShould:   true,
 		},
+		{
+			name:            "migrated to",
+			provisionerName: "csi.driver",
+			volume: newVolume("volume-1", v1.VolumeReleased, v1.PersistentVolumeReclaimDelete,
+				map[string]string{annDynamicallyProvisioned: "foo.bar/baz", annMigratedTo: "csi.driver"}),
+			serverGitVersion: "v1.17.0",
+			expectedShould:   true,
+		},
+		{
+			name:            "migrated to random",
+			provisionerName: "csi.driver",
+			volume: newVolume("volume-1", v1.VolumeReleased, v1.PersistentVolumeReclaimDelete,
+				map[string]string{annDynamicallyProvisioned: "foo.bar/baz", annMigratedTo: "some.foo.driver"}),
+			serverGitVersion: "v1.17.0",
+			expectedShould:   false,
+		},
+		{
+			name:            "csidriver but no migrated annotation",
+			provisionerName: "csi.driver",
+			volume: newVolume("volume-1", v1.VolumeReleased, v1.PersistentVolumeReclaimDelete,
+				map[string]string{annDynamicallyProvisioned: "foo.bar/baz"}),
+			serverGitVersion: "v1.17.0",
+			expectedShould:   false,
+		},
 	}
 	for _, test := range tests {
 		client := fake.NewSimpleClientset()
