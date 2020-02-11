@@ -76,7 +76,7 @@ const annDynamicallyProvisioned = "pv.kubernetes.io/provisioned-by"
 // through the CSIMigration feature flags. It allows external provisioners
 // to determine which PVs are considered migrated and safe to operate on for
 // Deletion.
-const annMigratedTo = "volume.beta.kubernetes.io/migrated-to"
+const annMigratedTo = "pv.kubernetes.io/migrated-to"
 
 const annStorageProvisioner = "volume.beta.kubernetes.io/storage-provisioner"
 
