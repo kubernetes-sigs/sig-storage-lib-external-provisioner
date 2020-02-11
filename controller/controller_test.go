@@ -368,89 +368,89 @@ func TestController(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		klog.Infof("starting %q", test.name)
-		reflectorCallCount = 0
+		t.Run(test.name, func(t *testing.T) {
+			reflectorCallCount = 0
 
-		client := fake.NewSimpleClientset(test.objs...)
-		if len(test.verbs) != 0 {
-			for _, v := range test.verbs {
-				client.Fake.PrependReactor(v, "persistentvolumes", test.reaction)
-			}
-		}
-
-		serverVersion := defaultServerVersion
-		if test.serverVersion != "" {
-			serverVersion = test.serverVersion
-		}
-
-		var ctrl *ProvisionController
-		if test.additionalProvisionerNames == nil {
-			ctrl = newTestProvisionController(client, test.provisionerName, test.provisioner, serverVersion)
-		} else {
-			ctrl = newTestProvisionControllerWithAdditionalNames(client, test.provisionerName, test.provisioner, serverVersion, test.additionalProvisionerNames)
-		}
-		for _, claim := range test.claimsInProgress {
-			ctrl.claimsInProgress.Store(string(claim.UID), claim)
-		}
-
-		if test.volumeQueueStore {
-			ctrl.volumeStore = NewVolumeStoreQueue(client, workqueue.DefaultItemBasedRateLimiter(), ctrl.claimsIndexer, ctrl.eventRecorder)
-		}
-
-		if test.enqueueClaim != nil {
-			ctrl.enqueueClaim(test.enqueueClaim)
-		}
-
-		stopCh := make(chan struct{})
-		go ctrl.Run(stopCh)
-
-		// When we shutdown while something is happening the fake client panics
-		// with send on closed channel...but the test passed, so ignore
-		utilruntime.ReallyCrash = false
-
-		time.Sleep(2 * resyncPeriod)
-
-		pvList, _ := client.CoreV1().PersistentVolumes().List(metav1.ListOptions{})
-		if !reflect.DeepEqual(test.expectedVolumes, pvList.Items) {
-			t.Logf("test case: %s", test.name)
-			t.Errorf("expected PVs:\n %v\n but got:\n %v\n", test.expectedVolumes, pvList.Items)
-		}
-
-		claimsInProgress := sets.NewString()
-		ctrl.claimsInProgress.Range(func(key, value interface{}) bool {
-			claimsInProgress.Insert(key.(string))
-			return true
-		})
-		expectedClaimsInProgress := sets.NewString(test.expectedClaimsInProgress...)
-		if !claimsInProgress.Equal(expectedClaimsInProgress) {
-			t.Errorf("expected claimsInProgres: %+v, got %+v", expectedClaimsInProgress.List(), claimsInProgress.List())
-		}
-
-		if test.volumeQueueStore {
-			queue := ctrl.volumeStore.(*queueStore)
-			// convert queue.volumes to array
-			queuedVolumes := []*v1.PersistentVolume{}
-			queue.volumes.Range(func(key, value interface{}) bool {
-				volume, ok := value.(*v1.PersistentVolume)
-				if !ok {
-					t.Errorf("test case: %s, Expected PersistentVolume in volume store queue, got %+v", test.name, value)
+			client := fake.NewSimpleClientset(test.objs...)
+			if len(test.verbs) != 0 {
+				for _, v := range test.verbs {
+					client.Fake.PrependReactor(v, "persistentvolumes", test.reaction)
 				}
-				queuedVolumes = append(queuedVolumes, volume)
+			}
+
+			serverVersion := defaultServerVersion
+			if test.serverVersion != "" {
+				serverVersion = test.serverVersion
+			}
+
+			var ctrl *ProvisionController
+			if test.additionalProvisionerNames == nil {
+				ctrl = newTestProvisionController(client, test.provisionerName, test.provisioner, serverVersion)
+			} else {
+				ctrl = newTestProvisionControllerWithAdditionalNames(client, test.provisionerName, test.provisioner, serverVersion, test.additionalProvisionerNames)
+			}
+			for _, claim := range test.claimsInProgress {
+				ctrl.claimsInProgress.Store(string(claim.UID), claim)
+			}
+
+			if test.volumeQueueStore {
+				ctrl.volumeStore = NewVolumeStoreQueue(client, workqueue.DefaultItemBasedRateLimiter(), ctrl.claimsIndexer, ctrl.eventRecorder)
+			}
+
+			if test.enqueueClaim != nil {
+				ctrl.enqueueClaim(test.enqueueClaim)
+			}
+
+			stopCh := make(chan struct{})
+			go ctrl.Run(stopCh)
+			close(stopCh)
+
+			// When we shutdown while something is happening the fake client panics
+			// with send on closed channel...but the test passed, so ignore
+			utilruntime.ReallyCrash = false
+
+			time.Sleep(2 * resyncPeriod)
+
+			pvList, _ := client.CoreV1().PersistentVolumes().List(metav1.ListOptions{})
+			if !reflect.DeepEqual(test.expectedVolumes, pvList.Items) {
+				t.Errorf("expected PVs:\n %v\n but got:\n %v\n", test.expectedVolumes, pvList.Items)
+			}
+
+			claimsInProgress := sets.NewString()
+			ctrl.claimsInProgress.Range(func(key, value interface{}) bool {
+				claimsInProgress.Insert(key.(string))
 				return true
 			})
-			if !reflect.DeepEqual(test.expectedStoredVolumes, queuedVolumes) {
-				t.Errorf("expected stored volumes:\n %v\n got: \n%v", test.expectedStoredVolumes, queuedVolumes)
+			expectedClaimsInProgress := sets.NewString(test.expectedClaimsInProgress...)
+			if !claimsInProgress.Equal(expectedClaimsInProgress) {
+				t.Errorf("expected claimsInProgres: %+v, got %+v", expectedClaimsInProgress.List(), claimsInProgress.List())
 			}
 
-			// Check that every volume is really in the workqueue. It has no List() functionality, use NumRequeues
-			// as workaround.
-			for _, volume := range test.expectedStoredVolumes {
-				if queue.queue.NumRequeues(volume.Name) == 0 {
-					t.Errorf("Expected volume %q in workqueue, but it has zero NumRequeues", volume.Name)
+			if test.volumeQueueStore {
+				queue := ctrl.volumeStore.(*queueStore)
+				// convert queue.volumes to array
+				queuedVolumes := []*v1.PersistentVolume{}
+				queue.volumes.Range(func(key, value interface{}) bool {
+					volume, ok := value.(*v1.PersistentVolume)
+					if !ok {
+						t.Errorf("Expected PersistentVolume in volume store queue, got %+v", value)
+					}
+					queuedVolumes = append(queuedVolumes, volume)
+					return true
+				})
+				if !reflect.DeepEqual(test.expectedStoredVolumes, queuedVolumes) {
+					t.Errorf("expected stored volumes:\n %v\n got: \n%v", test.expectedStoredVolumes, queuedVolumes)
+				}
+
+				// Check that every volume is really in the workqueue. It has no List() functionality, use NumRequeues
+				// as workaround.
+				for _, volume := range test.expectedStoredVolumes {
+					if queue.queue.NumRequeues(volume.Name) == 0 {
+						t.Errorf("Expected volume %q in workqueue, but it has zero NumRequeues", volume.Name)
+					}
 				}
 			}
-		}
-		close(stopCh)
+		})
 	}
 }
 
@@ -522,35 +522,36 @@ func TestTopologyParams(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		client := fake.NewSimpleClientset(test.objs...)
-		provisioner := newTestProvisioner()
-		serverVersion := "v1.11.0"
-		ctrl := newTestProvisionController(client, "foo.bar/baz" /* provisionerName */, provisioner, serverVersion)
-		stopCh := make(chan struct{})
-		go ctrl.Run(stopCh)
+		t.Run(test.name, func(t *testing.T) {
+			client := fake.NewSimpleClientset(test.objs...)
+			provisioner := newTestProvisioner()
+			serverVersion := "v1.11.0"
+			ctrl := newTestProvisionController(client, "foo.bar/baz" /* provisionerName */, provisioner, serverVersion)
+			stopCh := make(chan struct{})
+			go ctrl.Run(stopCh)
+			defer close(stopCh)
 
-		// When we shutdown while something is happening the fake client panics
-		// with send on closed channel...but the test passed, so ignore
-		utilruntime.ReallyCrash = false
+			// When we shutdown while something is happening the fake client panics
+			// with send on closed channel...but the test passed, so ignore
+			utilruntime.ReallyCrash = false
 
-		time.Sleep(2 * resyncPeriod)
+			time.Sleep(2 * resyncPeriod)
 
-		if test.expectedParams == nil {
-			if len(provisioner.provisionCalls) != 0 {
-				t.Errorf("did not expect a Provision() call but got at least 1")
-			}
-		} else {
-			if len(provisioner.provisionCalls) == 0 {
-				t.Errorf("expected Provision() call but got none")
+			if test.expectedParams == nil {
+				if len(provisioner.provisionCalls) != 0 {
+					t.Errorf("did not expect a Provision() call but got at least 1")
+				}
 			} else {
-				actual := <-provisioner.provisionCalls
-				if !reflect.DeepEqual(*test.expectedParams, actual) {
-					t.Errorf("expected topology parameters: %v; actual: %v", test.expectedParams, actual)
+				if len(provisioner.provisionCalls) == 0 {
+					t.Errorf("expected Provision() call but got none")
+				} else {
+					actual := <-provisioner.provisionCalls
+					if !reflect.DeepEqual(*test.expectedParams, actual) {
+						t.Errorf("expected topology parameters: %v; actual: %v", test.expectedParams, actual)
+					}
 				}
 			}
-		}
-
-		close(stopCh)
+		})
 	}
 }
 
@@ -687,36 +688,35 @@ func TestShouldProvision(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		client := fake.NewSimpleClientset(test.claim)
-		serverVersion := defaultServerVersion
-		if test.serverGitVersion != "" {
-			serverVersion = test.serverGitVersion
-		}
-
-		var ctrl *ProvisionController
-		if test.additionalProvisionerNames == nil {
-			ctrl = newTestProvisionController(client, test.provisionerName, test.provisioner, serverVersion)
-		} else {
-			ctrl = newTestProvisionControllerWithAdditionalNames(client, test.provisionerName, test.provisioner, serverVersion, test.additionalProvisionerNames)
-		}
-
-		if test.class != nil {
-			err := ctrl.classes.Add(test.class)
-			if err != nil {
-				t.Logf("test case: %s", test.name)
-				t.Errorf("error adding class %v to cache: %v", test.class, err)
+		t.Run(test.name, func(t *testing.T) {
+			client := fake.NewSimpleClientset(test.claim)
+			serverVersion := defaultServerVersion
+			if test.serverGitVersion != "" {
+				serverVersion = test.serverGitVersion
 			}
-		}
 
-		should, err := ctrl.shouldProvision(test.claim)
-		if test.expectedShould != should {
-			t.Logf("test case: %s", test.name)
-			t.Errorf("expected should provision %v but got %v\n", test.expectedShould, should)
-		}
-		if (err != nil && test.expectedError == false) || (err == nil && test.expectedError == true) {
-			t.Logf("test case: %s", test.name)
-			t.Errorf("expected error %v but got %v\n", test.expectedError, err)
-		}
+			var ctrl *ProvisionController
+			if test.additionalProvisionerNames == nil {
+				ctrl = newTestProvisionController(client, test.provisionerName, test.provisioner, serverVersion)
+			} else {
+				ctrl = newTestProvisionControllerWithAdditionalNames(client, test.provisionerName, test.provisioner, serverVersion, test.additionalProvisionerNames)
+			}
+
+			if test.class != nil {
+				err := ctrl.classes.Add(test.class)
+				if err != nil {
+					t.Errorf("error adding class %v to cache: %v", test.class, err)
+				}
+			}
+
+			should, err := ctrl.shouldProvision(test.claim)
+			if test.expectedShould != should {
+				t.Errorf("expected should provision %v but got %v\n", test.expectedShould, should)
+			}
+			if (err != nil && test.expectedError == false) || (err == nil && test.expectedError == true) {
+				t.Errorf("expected error %v but got %v\n", test.expectedError, err)
+			}
+		})
 	}
 }
 
@@ -813,16 +813,17 @@ func TestShouldDelete(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		client := fake.NewSimpleClientset()
-		provisioner := newTestProvisioner()
-		ctrl := newTestProvisionController(client, test.provisionerName, provisioner, test.serverGitVersion)
-		test.volume.ObjectMeta.DeletionTimestamp = test.deletionTimestamp
+		t.Run(test.name, func(t *testing.T) {
+			client := fake.NewSimpleClientset()
+			provisioner := newTestProvisioner()
+			ctrl := newTestProvisionController(client, test.provisionerName, provisioner, test.serverGitVersion)
+			test.volume.ObjectMeta.DeletionTimestamp = test.deletionTimestamp
 
-		should := ctrl.shouldDelete(test.volume)
-		if test.expectedShould != should {
-			t.Logf("test case: %s", test.name)
-			t.Errorf("expected should delete %v but got %v\n", test.expectedShould, should)
-		}
+			should := ctrl.shouldDelete(test.volume)
+			if test.expectedShould != should {
+				t.Errorf("expected should delete %v but got %v\n", test.expectedShould, should)
+			}
+		})
 	}
 }
 
@@ -898,18 +899,19 @@ func TestCanProvision(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		client := fake.NewSimpleClientset(test.claim)
-		serverVersion := defaultServerVersion
-		if test.serverGitVersion != "" {
-			serverVersion = test.serverGitVersion
-		}
-		ctrl := newTestProvisionController(client, provisionerName, test.provisioner, serverVersion)
+		t.Run(test.name, func(t *testing.T) {
+			client := fake.NewSimpleClientset(test.claim)
+			serverVersion := defaultServerVersion
+			if test.serverGitVersion != "" {
+				serverVersion = test.serverGitVersion
+			}
+			ctrl := newTestProvisionController(client, provisionerName, test.provisioner, serverVersion)
 
-		can := ctrl.canProvision(test.claim)
-		if !reflect.DeepEqual(test.expectedCan, can) {
-			t.Logf("test case: %s", test.name)
-			t.Errorf("expected can provision %v but got %v\n", test.expectedCan, can)
-		}
+			can := ctrl.canProvision(test.claim)
+			if !reflect.DeepEqual(test.expectedCan, can) {
+				t.Errorf("expected can provision %v but got %v\n", test.expectedCan, can)
+			}
+		})
 	}
 }
 
@@ -956,33 +958,34 @@ func TestControllerSharedInformers(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		client := fake.NewSimpleClientset(test.objs...)
+		t.Run(test.name, func(t *testing.T) {
+			client := fake.NewSimpleClientset(test.objs...)
 
-		serverVersion := defaultServerVersion
-		if test.serverVersion != "" {
-			serverVersion = test.serverVersion
-		}
-		ctrl, informersFactory := newTestProvisionControllerSharedInformers(client, test.provisionerName,
-			newTestProvisioner(), serverVersion, sharedResyncPeriod)
-		stopCh := make(chan struct{})
+			serverVersion := defaultServerVersion
+			if test.serverVersion != "" {
+				serverVersion = test.serverVersion
+			}
+			ctrl, informersFactory := newTestProvisionControllerSharedInformers(client, test.provisionerName,
+				newTestProvisioner(), serverVersion, sharedResyncPeriod)
+			stopCh := make(chan struct{})
+			defer close(stopCh)
 
-		go ctrl.Run(stopCh)
-		go informersFactory.Start(stopCh)
+			go ctrl.Run(stopCh)
+			go informersFactory.Start(stopCh)
 
-		// When we shutdown while something is happening the fake client panics
-		// with send on closed channel...but the test passed, so ignore
-		utilruntime.ReallyCrash = false
+			// When we shutdown while something is happening the fake client panics
+			// with send on closed channel...but the test passed, so ignore
+			utilruntime.ReallyCrash = false
 
-		informersFactory.WaitForCacheSync(stopCh)
-		time.Sleep(2 * sharedResyncPeriod)
+			informersFactory.WaitForCacheSync(stopCh)
+			time.Sleep(2 * sharedResyncPeriod)
 
-		pvList, _ := client.CoreV1().PersistentVolumes().List(metav1.ListOptions{})
-		if (len(test.expectedVolumes) > 0 || len(pvList.Items) > 0) &&
-			!reflect.DeepEqual(test.expectedVolumes, pvList.Items) {
-			t.Logf("test case: %s", test.name)
-			t.Errorf("expected PVs:\n %v\n but got:\n %v\n", test.expectedVolumes, pvList.Items)
-		}
-		close(stopCh)
+			pvList, _ := client.CoreV1().PersistentVolumes().List(metav1.ListOptions{})
+			if (len(test.expectedVolumes) > 0 || len(pvList.Items) > 0) &&
+				!reflect.DeepEqual(test.expectedVolumes, pvList.Items) {
+				t.Errorf("expected PVs:\n %v\n but got:\n %v\n", test.expectedVolumes, pvList.Items)
+			}
+		})
 	}
 }
 
