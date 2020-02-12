@@ -1,4 +1,4 @@
-module sigs.k8s.io/sig-storage-lib-external-provisioner
+module sigs.k8s.io/sig-storage-lib-external-provisioner/v5
 
 go 1.13
 

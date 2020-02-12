@@ -1,0 +1,1 @@
+../../gidallocator/doc.go
