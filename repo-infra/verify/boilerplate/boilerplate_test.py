@@ -16,7 +16,11 @@
 
 import boilerplate
 import unittest
-import StringIO
+try:
+  import StringIO as io
+except:
+  import io
+
 import os
 import sys
 
@@ -39,7 +43,7 @@ class TestBoilerplate(unittest.TestCase):
 
     # capture stdout
     old_stdout = sys.stdout
-    sys.stdout = StringIO.StringIO()
+    sys.stdout = io.StringIO()
 
     boilerplate.args = Args()
     ret = boilerplate.main()

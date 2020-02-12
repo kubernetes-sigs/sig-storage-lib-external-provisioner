@@ -15,13 +15,12 @@
 all: verify test
 
 dep:
-	cp .Gopkg.toml Gopkg.toml
-	-dep init
-	dep ensure
+	go mod tidy
 
 verify: dep
-	go get -u github.com/alecthomas/gometalinter
-	gometalinter --install
+	# todo gometalinter is DEPRECATED, Use https://github.com/golangci/golangci-lint
+	GO111MODULE=off go get -u github.com/alecthomas/gometalinter
+	GO111MODULE=off gometalinter --install
 	repo-infra/verify/verify-go-src.sh -v
 	repo-infra/verify/verify-boilerplate.sh
 
@@ -30,9 +29,4 @@ test: dep
 	go test ./allocator
 
 clean:
-	rm -rf ./vendor
-	rm -rf ./Gopkg.toml
-	rm -rf ./Gopkg.lock
-	rm -rf ./examples/hostpath-provisioner/vendor
-	rm -rf ./examples/hostpath-provisioner/Gopkg.lock
 	rm -rf ./test/e2e/kubernetes

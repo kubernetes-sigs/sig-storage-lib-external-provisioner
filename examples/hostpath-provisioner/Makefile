@@ -17,8 +17,7 @@ IMAGE?=hostpath-provisioner
 all: dep hostpath-provisioner image
 
 dep:
-	-dep init
-	dep ensure
+	go mod tidy
 
 hostpath-provisioner:
 	CGO_ENABLED=0 go build -a -ldflags '-extldflags "-static"' -o hostpath-provisioner .
@@ -27,6 +26,4 @@ image: hostpath-provisioner
 	docker build -t $(IMAGE) -f Dockerfile.scratch .
 
 clean:
-	rm -rf vendor
-	rm -rf Gopkg.lock
 	rm -rf hostpath-provisioner

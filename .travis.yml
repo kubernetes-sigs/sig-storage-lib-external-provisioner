@@ -1,10 +1,8 @@
 language: go
 go_import_path: sigs.k8s.io/sig-storage-lib-external-provisioner
 go:
-  - 1.11.1
+  - 1.13.7
 services: docker
-install:
-  - curl https://raw.githubusercontent.com/golang/dep/master/install.sh | sh
 script:
   - make verify
   - make test
