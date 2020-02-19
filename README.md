@@ -4,7 +4,7 @@ A library for writing [external provisioners](https://kubernetes.io/docs/concept
 
 ## Packages
 ### `controller`
-Contains the Provisioner interface and ProvisionController, a custom Kubernetes [controller](https://github.com/kubernetes/community/blob/master/contributors/devel/controllers.md) that watches PersistentVolumes and PersistentVolumeClaims. Implement the Provisioner interface, pass the implementation to a ProvisionController, and Run the controller, which then takes care of calling the Provisioner's Provision or Delete as needed.
+Contains the Provisioner interface and ProvisionController, a custom Kubernetes [controller](https://github.com/kubernetes/community/blob/master/contributors/devel/sig-api-machinery/controllers.md) that watches PersistentVolumes and PersistentVolumeClaims. Implement the Provisioner interface, pass the implementation to a ProvisionController, and Run the controller, which then takes care of calling the Provisioner's Provision or Delete as needed.
 
 ## Optional Packages
 ### `util`
