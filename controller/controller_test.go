@@ -100,6 +100,38 @@ func TestController(t *testing.T) {
 			},
 		},
 		{
+			name: "don't provision, volume already exists",
+			objs: []runtime.Object{
+				newBetaStorageClass("class-1", "foo.bar/baz"),
+				newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil),
+				newProvisionedVolume(newBetaStorageClass("class-1", "foo.bar/baz"), newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil)),
+			},
+			provisionerName: "foo.bar/baz",
+			provisioner:     newTestProvisioner(),
+			expectedVolumes: []v1.PersistentVolume{
+				*newProvisionedVolume(newBetaStorageClass("class-1", "foo.bar/baz"), newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil)),
+			},
+			expectedMetrics: testMetrics{
+				provisioned: counts{
+					"class-1": count{failed: 1},
+				},
+			},
+		},
+		{
+			name: "don't provision, provisioner does not support raw block",
+			objs: []runtime.Object{
+				newBetaStorageClass("class-1", "foo.bar/baz"),
+				newClaimWithVolumeMode("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil, v1.PersistentVolumeBlock),
+			},
+			provisionerName: "foo.bar/baz",
+			provisioner:     newTestProvisioner(),
+			expectedMetrics: testMetrics{
+				provisioned: counts{
+					"class-1": count{failed: 1},
+				},
+			},
+		},
+		{
 			name: "provision for claim-1 with storage class provisioner name distinct from controller provisioner name",
 			objs: []runtime.Object{
 				newBetaStorageClass("class-1", "foo.bar/baz"),
@@ -250,6 +282,20 @@ func TestController(t *testing.T) {
 			},
 		},
 		{
+			name: "don't provision, because it is ignored",
+			objs: []runtime.Object{
+				newBetaStorageClass("class-1", "foo.bar/baz"),
+				newClaim("claim-2", "uid-1-1", "class-1", "foo.bar/baz", "", nil),
+			},
+			provisionerName: "foo.bar/baz",
+			provisioner:     newIgnoredProvisioner(),
+			expectedMetrics: testMetrics{
+				provisioned: counts{
+					"class-1": count{failed: 1},
+				},
+			},
+		},
+		{
 			name: "provision for claim-1 but not claim-2, because it is ignored",
 			objs: []runtime.Object{
 				newBetaStorageClass("class-1", "foo.bar/baz"),
@@ -263,7 +309,7 @@ func TestController(t *testing.T) {
 			},
 			expectedMetrics: testMetrics{
 				provisioned: counts{
-					"class-1": count{success: 1},
+					"class-1": count{success: 1, failed: 1},
 				},
 			},
 		},
