@@ -94,7 +94,7 @@ const finalizerPV = "external-provisioner.volume.kubernetes.io/finalizer"
 const uidIndex = "uid"
 
 var (
-	stopProvisionError = errors.New("stop provisioning")
+	errStopProvision = errors.New("stop provisioning")
 )
 
 // ProvisionController is a controller that provisions PersistentVolumes for
@@ -1043,7 +1043,7 @@ func (ctrl *ProvisionController) syncClaim(obj interface{}) error {
 			switch err {
 			case nil:
 				glog.V(5).Infof("Claim processing succeeded, removing PVC %s from claims in progress", claim.UID)
-			case stopProvisionError:
+			case errStopProvision:
 				glog.V(5).Infof("Stop provisioning, removing PVC %s from claims in progress", claim.UID)
 				// Our caller would requeue if we pass on this special error; return nil instead.
 				err = nil
@@ -1115,6 +1115,22 @@ func (ctrl *ProvisionController) shouldProvision(claim *v1.PersistentVolumeClaim
 	if ctrl.kubeVersion.AtLeast(utilversion.MustParseSemantic("v1.5.0")) {
 		if provisioner, found := claim.Annotations[annStorageProvisioner]; found {
 			if ctrl.knownProvisioner(provisioner) {
+				claimClass := util.GetPersistentVolumeClaimClass(claim)
+				class, err := ctrl.getStorageClass(claimClass)
+				if err != nil {
+					return false, err
+				}
+				if class.VolumeBindingMode != nil && *class.VolumeBindingMode == storage.VolumeBindingWaitForFirstConsumer {
+					// When claim is in delay binding mode, annSelectedNode is
+					// required to provision volume.
+					// Though PV controller set annStorageProvisioner only when
+					// annSelectedNode is set, but provisioner may remove
+					// annSelectedNode to notify scheduler to reschedule again.
+					if selectedNode, ok := claim.Annotations[annSelectedNode]; ok && selectedNode != "" {
+						return true, nil
+					}
+					return false, nil
+				}
 				return true, nil
 			}
 		}
@@ -1226,10 +1242,41 @@ func (ctrl *ProvisionController) updateDeleteStats(volume *v1.PersistentVolume, 
 	}
 }
 
+// rescheduleProvisioning signal back to the scheduler to retry dynamic provisioning
+// by removing the annSelectedNode annotation
+func (ctrl *ProvisionController) rescheduleProvisioning(claim *v1.PersistentVolumeClaim) error {
+	if _, ok := claim.Annotations[annSelectedNode]; !ok {
+		// Provisioning not triggered by the scheduler, skip
+		return nil
+	}
+
+	// The claim from method args can be pointing to watcher cache. We must not
+	// modify these, therefore create a copy.
+	newClaim := claim.DeepCopy()
+	delete(newClaim.Annotations, annSelectedNode)
+	// Try to update the PVC object
+	if _, err := ctrl.client.CoreV1().PersistentVolumeClaims(newClaim.Namespace).Update(newClaim); err != nil {
+		return fmt.Errorf("delete annotation 'annSelectedNode' for PersistentVolumeClaim %q: %v", claimToClaimKey(newClaim), err)
+	}
+
+	// Save updated claim into informer cache to avoid operations on old claim.
+	if err := ctrl.claimInformer.GetStore().Update(newClaim); err != nil {
+		// This shouldn't happen because it is a local
+		// operation. The only situation in which Update fails
+		// is when the object is invalid, which isn't the case
+		// here
+		// (https://github.com/kubernetes/client-go/blob/eb0bad8167df60e402297b26e2cee1bddffde108/tools/cache/store.go#L154-L162).
+		// Log the error and hope that a regular cache update will resolve it.
+		glog.Warningf("update claim informer cache for PersistentVolumeClaim %q: %v", claimToClaimKey(newClaim), err)
+	}
+
+	return nil
+}
+
 // provisionClaimOperation attempts to provision a volume for the given claim.
 // Returns nil error only when the volume was provisioned (in which case it also returns ProvisioningFinished),
 // a normal error when the volume was not provisioned and provisioning should be retried (requeue the claim),
-// or the special stopProvisionError when provisioning was impossible and no further attempts to provision should be tried.
+// or the special errStopProvision when provisioning was impossible and no further attempts to provision should be tried.
 func (ctrl *ProvisionController) provisionClaimOperation(claim *v1.PersistentVolumeClaim) (ProvisioningState, error) {
 	// Most code here is identical to that found in controller.go of kube's PV controller...
 	claimClass := util.GetPersistentVolumeClaimClass(claim)
@@ -1244,7 +1291,7 @@ func (ctrl *ProvisionController) provisionClaimOperation(claim *v1.PersistentVol
 	if err == nil && volume != nil {
 		// Volume has been already provisioned, nothing to do.
 		glog.Info(logOperation(operation, "persistentvolume %q already exists, skipping", pvName))
-		return ProvisioningFinished, stopProvisionError
+		return ProvisioningFinished, errStopProvision
 	}
 
 	// Prepare a claimRef to the claim early (to fail before a volume is
@@ -1259,7 +1306,7 @@ func (ctrl *ProvisionController) provisionClaimOperation(claim *v1.PersistentVol
 	if err = ctrl.canProvision(claim); err != nil {
 		ctrl.eventRecorder.Event(claim, v1.EventTypeWarning, "ProvisioningFailed", err.Error())
 		glog.Error(logOperation(operation, "failed to provision volume: %v", err))
-		return ProvisioningFinished, stopProvisionError
+		return ProvisioningFinished, errStopProvision
 	}
 
 	// For any issues getting fields from StorageClass (including reclaimPolicy & mountOptions),
@@ -1274,7 +1321,7 @@ func (ctrl *ProvisionController) provisionClaimOperation(claim *v1.PersistentVol
 		// annDynamicallyProvisioned contains different provisioner than
 		// class.Provisioner.
 		glog.Error(logOperation(operation, "unknown provisioner %q requested in claim's StorageClass", class.Provisioner))
-		return ProvisioningFinished, stopProvisionError
+		return ProvisioningFinished, errStopProvision
 	}
 
 	var selectedNode *v1.Node
@@ -1309,10 +1356,36 @@ func (ctrl *ProvisionController) provisionClaimOperation(claim *v1.PersistentVol
 		if ierr, ok := err.(*IgnoredError); ok {
 			// Provision ignored, do nothing and hope another provisioner will provision it.
 			glog.Info(logOperation(operation, "volume provision ignored: %v", ierr))
-			return ProvisioningFinished, stopProvisionError
+			return ProvisioningFinished, errStopProvision
 		}
 		err = fmt.Errorf("failed to provision volume with StorageClass %q: %v", claimClass, err)
 		ctrl.eventRecorder.Event(claim, v1.EventTypeWarning, "ProvisioningFailed", err.Error())
+		if _, ok := claim.Annotations[annSelectedNode]; ok && result == ProvisioningReschedule {
+			// For dynamic PV provisioning with delayed binding, the provisioner may fail
+			// because the node is wrong (permanent error) or currently unusable (not enough
+			// capacity). If the provisioner wants to give up scheduling with the currently
+			// selected node, then it can ask for that by returning ProvisioningReschedule
+			// as state.
+			//
+			// `selectedNode` must be removed to notify scheduler to schedule again.
+			if errLabel := ctrl.rescheduleProvisioning(claim); errLabel != nil {
+				glog.Info(logOperation(operation, "volume rescheduling failed: %v", errLabel))
+				// If unsetting that label fails in ctrl.rescheduleProvisioning, we
+				// keep the volume in the work queue as if the provisioner had
+				// returned ProvisioningFinished and simply try again later.
+				return ProvisioningFinished, err
+			}
+			// Label was removed, stop working on the volume.
+			glog.Info(logOperation(operation, "volume rescheduled because: %v", err))
+			return ProvisioningFinished, errStopProvision
+		}
+
+		// ProvisioningReschedule shouldn't have been returned for volumes without selected node,
+		// but if we get it anyway, then treat it like ProvisioningFinished because we cannot
+		// reschedule.
+		if result == ProvisioningReschedule {
+			result = ProvisioningFinished
+		}
 		return result, err
 	}
 

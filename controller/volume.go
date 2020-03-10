@@ -97,6 +97,13 @@ const (
 	// first ProvisionExt call, ProvisioningFinished is assumed (the provisioning
 	// could not even start).
 	ProvisioningNoChange ProvisioningState = "NoChange"
+	// ProvisioningReschedule tells the controller that it shall stop all further
+	// attempts to provision the volume and instead ask the Kubernetes scheduler
+	// to pick a different node. This only makes sense for volumes with a selected
+	// node, i.e. those with late binding, and must only be returned when it is certain
+	// that provisioning does not continue in the background. The error returned together
+	// with this state contains further information why rescheduling is needed.
+	ProvisioningReschedule ProvisioningState = "Reschedule"
 )
 
 // IgnoredError is the value for Delete to return to indicate that the call has
