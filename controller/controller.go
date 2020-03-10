@@ -154,6 +154,8 @@ type ProvisionController struct {
 
 	failedProvisionThreshold, failedDeleteThreshold int
 
+	// The metrics collection used by this controller.
+	metrics metrics.Metrics
 	// The port for metrics server to serve on.
 	metricsPort int32
 	// The IP address for metrics server to serve on.
@@ -489,6 +491,17 @@ func ClassesInformer(informer cache.SharedInformer) func(*ProvisionController) e
 	}
 }
 
+// MetricsInstance defines which metrics collection to update. Default: metrics.Metrics.
+func MetricsInstance(m metrics.Metrics) func(*ProvisionController) error {
+	return func(c *ProvisionController) error {
+		if c.HasRun() {
+			return errRuntime
+		}
+		c.metrics = m
+		return nil
+	}
+}
+
 // MetricsPort sets the port that metrics server serves on. Default: 0, set to non-zero to enable.
 func MetricsPort(metricsPort int32) func(*ProvisionController) error {
 	return func(c *ProvisionController) error {
@@ -594,6 +607,7 @@ func NewProvisionController(
 		leaseDuration:             DefaultLeaseDuration,
 		renewDeadline:             DefaultRenewDeadline,
 		retryPeriod:               DefaultRetryPeriod,
+		metrics:                   metrics.M,
 		metricsPort:               DefaultMetricsPort,
 		metricsAddress:            DefaultMetricsAddress,
 		metricsPath:               DefaultMetricsPath,
@@ -1184,20 +1198,20 @@ func (ctrl *ProvisionController) updateProvisionStats(claim *v1.PersistentVolume
 		class = *claim.Spec.StorageClassName
 	}
 	if err != nil {
-		metrics.PersistentVolumeClaimProvisionFailedTotal.WithLabelValues(class).Inc()
+		ctrl.metrics.PersistentVolumeClaimProvisionFailedTotal.WithLabelValues(class).Inc()
 	} else {
-		metrics.PersistentVolumeClaimProvisionDurationSeconds.WithLabelValues(class).Observe(time.Since(startTime).Seconds())
-		metrics.PersistentVolumeClaimProvisionTotal.WithLabelValues(class).Inc()
+		ctrl.metrics.PersistentVolumeClaimProvisionDurationSeconds.WithLabelValues(class).Observe(time.Since(startTime).Seconds())
+		ctrl.metrics.PersistentVolumeClaimProvisionTotal.WithLabelValues(class).Inc()
 	}
 }
 
 func (ctrl *ProvisionController) updateDeleteStats(volume *v1.PersistentVolume, err error, startTime time.Time) {
 	class := volume.Spec.StorageClassName
 	if err != nil {
-		metrics.PersistentVolumeDeleteFailedTotal.WithLabelValues(class).Inc()
+		ctrl.metrics.PersistentVolumeDeleteFailedTotal.WithLabelValues(class).Inc()
 	} else {
-		metrics.PersistentVolumeDeleteDurationSeconds.WithLabelValues(class).Observe(time.Since(startTime).Seconds())
-		metrics.PersistentVolumeDeleteTotal.WithLabelValues(class).Inc()
+		ctrl.metrics.PersistentVolumeDeleteDurationSeconds.WithLabelValues(class).Observe(time.Since(startTime).Seconds())
+		ctrl.metrics.PersistentVolumeDeleteTotal.WithLabelValues(class).Inc()
 	}
 }
 

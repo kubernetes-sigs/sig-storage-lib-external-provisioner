@@ -23,6 +23,10 @@ import (
 	"testing"
 	"time"
 
+	"sigs.k8s.io/sig-storage-lib-external-provisioner/controller/metrics"
+
+	"github.com/prometheus/client_golang/prometheus"
+	dto "github.com/prometheus/client_model/go"
 	"k8s.io/api/core/v1"
 	storage "k8s.io/api/storage/v1"
 	storagebeta "k8s.io/api/storage/v1beta1"
@@ -32,6 +36,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apimachinery/pkg/util/sets"
+	"k8s.io/apimachinery/pkg/util/uuid"
 	utilversion "k8s.io/apimachinery/pkg/util/version"
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
@@ -73,6 +78,7 @@ func TestController(t *testing.T) {
 		serverVersion              string
 		volumeQueueStore           bool
 		expectedStoredVolumes      []*v1.PersistentVolume
+		expectedMetrics            testMetrics
 	}{
 		{
 			name: "provision for claim-1 but not claim-2",
@@ -87,6 +93,11 @@ func TestController(t *testing.T) {
 			expectedVolumes: []v1.PersistentVolume{
 				*newProvisionedVolume(newBetaStorageClass("class-1", "foo.bar/baz"), newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil)),
 			},
+			expectedMetrics: testMetrics{
+				provisioned: counts{
+					"class-1": count{success: 1},
+				},
+			},
 		},
 		{
 			name: "provision for claim-1 with storage class provisioner name distinct from controller provisioner name",
@@ -100,6 +111,11 @@ func TestController(t *testing.T) {
 			expectedVolumes: []v1.PersistentVolume{
 				*newProvisionedVolume(newBetaStorageClass("class-1", "csi.com/mock-csi"), newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil)),
 			},
+			expectedMetrics: testMetrics{
+				provisioned: counts{
+					"class-1": count{success: 1},
+				},
+			},
 		},
 		{
 			name: "delete volume-1 but not volume-2",
@@ -111,6 +127,11 @@ func TestController(t *testing.T) {
 			provisioner:     newTestProvisioner(),
 			expectedVolumes: []v1.PersistentVolume{
 				*newVolume("volume-2", v1.VolumeReleased, v1.PersistentVolumeReclaimDelete, map[string]string{annDynamicallyProvisioned: "abc.def/ghi"}),
+			},
+			expectedMetrics: testMetrics{
+				deleted: counts{
+					"": count{success: 1},
+				},
 			},
 		},
 		{
@@ -130,6 +151,11 @@ func TestController(t *testing.T) {
 			provisionerName: "foo.bar/baz",
 			provisioner:     newTestProvisioner(),
 			expectedVolumes: []v1.PersistentVolume(nil),
+			expectedMetrics: testMetrics{
+				provisioned: counts{
+					"class-1": count{failed: 1},
+				},
+			},
 		},
 		{
 			name: "don't delete volume-1 because it's still bound",
@@ -162,6 +188,11 @@ func TestController(t *testing.T) {
 			provisionerName: "foo.bar/baz",
 			provisioner:     newBadTestProvisioner(),
 			expectedVolumes: []v1.PersistentVolume(nil),
+			expectedMetrics: testMetrics{
+				provisioned: counts{
+					"class-1": count{failed: 1},
+				},
+			},
 		},
 		{
 			name: "provisioner fails to delete volume-1: pv is not deleted",
@@ -172,6 +203,11 @@ func TestController(t *testing.T) {
 			provisioner:     newBadTestProvisioner(),
 			expectedVolumes: []v1.PersistentVolume{
 				*newVolume("volume-1", v1.VolumeReleased, v1.PersistentVolumeReclaimDelete, map[string]string{annDynamicallyProvisioned: "foo.bar/baz"}),
+			},
+			expectedMetrics: testMetrics{
+				deleted: counts{
+					"": count{failed: 1},
+				},
 			},
 		},
 		{
@@ -187,6 +223,11 @@ func TestController(t *testing.T) {
 				return true, nil, errors.New("fake error")
 			},
 			expectedVolumes: []v1.PersistentVolume(nil),
+			expectedMetrics: testMetrics{
+				provisioned: counts{
+					"class-1": count{failed: 1},
+				},
+			},
 		},
 		{
 			name: "try to delete volume-1 but fail to delete the pv object",
@@ -202,6 +243,11 @@ func TestController(t *testing.T) {
 			expectedVolumes: []v1.PersistentVolume{
 				*newVolume("volume-1", v1.VolumeReleased, v1.PersistentVolumeReclaimDelete, map[string]string{annDynamicallyProvisioned: "foo.bar/baz"}),
 			},
+			expectedMetrics: testMetrics{
+				deleted: counts{
+					"": count{failed: 1},
+				},
+			},
 		},
 		{
 			name: "provision for claim-1 but not claim-2, because it is ignored",
@@ -214,6 +260,11 @@ func TestController(t *testing.T) {
 			provisioner:     newIgnoredProvisioner(),
 			expectedVolumes: []v1.PersistentVolume{
 				*newProvisionedVolume(newBetaStorageClass("class-1", "foo.bar/baz"), newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil)),
+			},
+			expectedMetrics: testMetrics{
+				provisioned: counts{
+					"class-1": count{success: 1},
+				},
 			},
 		},
 		{
@@ -228,6 +279,11 @@ func TestController(t *testing.T) {
 			expectedVolumes: []v1.PersistentVolume{
 				*newProvisionedVolumeWithSpecifiedReclaimPolicy(newStorageClassWithSpecifiedReclaimPolicy("class-1", "foo.bar/baz", v1.PersistentVolumeReclaimRetain), newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil)),
 			},
+			expectedMetrics: testMetrics{
+				provisioned: counts{
+					"class-1": count{success: 1},
+				},
+			},
 		},
 		{
 			name: "provision for ext provisioner",
@@ -240,6 +296,11 @@ func TestController(t *testing.T) {
 			expectedVolumes: []v1.PersistentVolume{
 				*newProvisionedVolume(newBetaStorageClass("class-1", "foo.bar/baz"), newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil)),
 			},
+			expectedMetrics: testMetrics{
+				provisioned: counts{
+					"class-1": count{success: 1},
+				},
+			},
 		},
 		{
 			name: "ext provisioner: final error does not mark claim as in progress",
@@ -250,6 +311,11 @@ func TestController(t *testing.T) {
 			provisionerName:          "foo.bar/baz",
 			provisioner:              newExtProvisioner(t, "pvc-uid-1-1", ProvisioningFinished, fmt.Errorf("mock error")),
 			expectedClaimsInProgress: []string{},
+			expectedMetrics: testMetrics{
+				provisioned: counts{
+					"class-1": count{failed: 1},
+				},
+			},
 		},
 		{
 			name: "ext provisioner: provisional error marks claim as in progress",
@@ -260,6 +326,11 @@ func TestController(t *testing.T) {
 			provisionerName:          "foo.bar/baz",
 			provisioner:              newExtProvisioner(t, "pvc-uid-1-1", ProvisioningInBackground, fmt.Errorf("mock error")),
 			expectedClaimsInProgress: []string{"uid-1-1"},
+			expectedMetrics: testMetrics{
+				provisioned: counts{
+					"class-1": count{failed: 1},
+				},
+			},
 		},
 		{
 			name: "ext provisioner: NoChange error does not mark claim as in progress",
@@ -270,6 +341,11 @@ func TestController(t *testing.T) {
 			provisionerName:          "foo.bar/baz",
 			provisioner:              newExtProvisioner(t, "pvc-uid-1-1", ProvisioningNoChange, fmt.Errorf("mock error")),
 			expectedClaimsInProgress: []string{},
+			expectedMetrics: testMetrics{
+				provisioned: counts{
+					"class-1": count{failed: 1},
+				},
+			},
 		},
 		{
 			name: "ext provisioner: final error removes claim from in progress",
@@ -283,6 +359,11 @@ func TestController(t *testing.T) {
 			provisionerName:          "foo.bar/baz",
 			provisioner:              newExtProvisioner(t, "pvc-uid-1-1", ProvisioningFinished, fmt.Errorf("mock error")),
 			expectedClaimsInProgress: []string{},
+			expectedMetrics: testMetrics{
+				provisioned: counts{
+					"class-1": count{failed: 1},
+				},
+			},
 		},
 		{
 			name: "ext provisioner: provisional error does not remove claim from in progress",
@@ -296,6 +377,11 @@ func TestController(t *testing.T) {
 			provisionerName:          "foo.bar/baz",
 			provisioner:              newExtProvisioner(t, "pvc-uid-1-1", ProvisioningInBackground, fmt.Errorf("mock error")),
 			expectedClaimsInProgress: []string{"uid-1-1"},
+			expectedMetrics: testMetrics{
+				provisioned: counts{
+					"class-1": count{failed: 1},
+				},
+			},
 		},
 		{
 			name: "ext provisioner: NoChange error does not remove claim from in progress",
@@ -309,6 +395,11 @@ func TestController(t *testing.T) {
 			provisionerName:          "foo.bar/baz",
 			provisioner:              newExtProvisioner(t, "pvc-uid-1-1", ProvisioningNoChange, fmt.Errorf("mock error")),
 			expectedClaimsInProgress: []string{"uid-1-1"},
+			expectedMetrics: testMetrics{
+				provisioned: counts{
+					"class-1": count{failed: 1},
+				},
+			},
 		},
 		{
 			name: "ext provisioner: claimsInProgress is used for deleted PVCs",
@@ -324,6 +415,11 @@ func TestController(t *testing.T) {
 			expectedClaimsInProgress: []string{},
 			expectedVolumes: []v1.PersistentVolume{
 				*newProvisionedVolume(newBetaStorageClass("class-1", "foo.bar/baz"), newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil)),
+			},
+			expectedMetrics: testMetrics{
+				provisioned: counts{
+					"class-1": count{success: 1},
+				},
 			},
 		},
 		{
@@ -342,6 +438,11 @@ func TestController(t *testing.T) {
 			volumeQueueStore: true,
 			expectedStoredVolumes: []*v1.PersistentVolume{
 				newProvisionedVolume(newBetaStorageClass("class-1", "foo.bar/baz"), newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil)),
+			},
+			expectedMetrics: testMetrics{
+				provisioned: counts{
+					"class-1": count{success: 1},
+				},
 			},
 		},
 		{
@@ -365,6 +466,11 @@ func TestController(t *testing.T) {
 			},
 			volumeQueueStore:      true,
 			expectedStoredVolumes: []*v1.PersistentVolume{},
+			expectedMetrics: testMetrics{
+				provisioned: counts{
+					"class-1": count{success: 1},
+				},
+			},
 		},
 	}
 	for _, test := range tests {
@@ -383,7 +489,7 @@ func TestController(t *testing.T) {
 				serverVersion = test.serverVersion
 			}
 
-			var ctrl *ProvisionController
+			var ctrl testProvisionController
 			if test.additionalProvisionerNames == nil {
 				ctrl = newTestProvisionController(client, test.provisionerName, test.provisioner, serverVersion)
 			} else {
@@ -449,6 +555,11 @@ func TestController(t *testing.T) {
 						t.Errorf("Expected volume %q in workqueue, but it has zero NumRequeues", volume.Name)
 					}
 				}
+			}
+
+			tm := ctrl.getMetrics(t)
+			if !reflect.DeepEqual(test.expectedMetrics, tm) {
+				t.Errorf("expected metrics:\n %+v\n but got:\n %+v", test.expectedMetrics, tm)
 			}
 		})
 	}
@@ -695,7 +806,7 @@ func TestShouldProvision(t *testing.T) {
 				serverVersion = test.serverGitVersion
 			}
 
-			var ctrl *ProvisionController
+			var ctrl testProvisionController
 			if test.additionalProvisionerNames == nil {
 				ctrl = newTestProvisionController(client, test.provisionerName, test.provisioner, serverVersion)
 			} else {
@@ -989,23 +1100,83 @@ func TestControllerSharedInformers(t *testing.T) {
 	}
 }
 
+type testMetrics struct {
+	provisioned counts
+	deleted     counts
+}
+
+type counts map[string]count
+
+type count struct {
+	success float64
+	failed  float64
+}
+
+type testProvisionController struct {
+	*ProvisionController
+	metrics *metrics.Metrics
+}
+
+func (ctrl testProvisionController) getMetrics(t *testing.T) testMetrics {
+	var tm testMetrics
+	getCounts(t, ctrl.metrics.PersistentVolumeClaimProvisionTotal, &tm.provisioned, true)
+	getCounts(t, ctrl.metrics.PersistentVolumeClaimProvisionFailedTotal, &tm.provisioned, false)
+	getCounts(t, ctrl.metrics.PersistentVolumeDeleteTotal, &tm.deleted, true)
+	getCounts(t, ctrl.metrics.PersistentVolumeDeleteFailedTotal, &tm.deleted, false)
+	return tm
+}
+
+func getCounts(t *testing.T, vec *prometheus.CounterVec, cts *counts, success bool) {
+	metricCh := make(chan prometheus.Metric)
+	go func() {
+		vec.Collect(metricCh)
+		close(metricCh)
+	}()
+	for metric := range metricCh {
+		var m dto.Metric
+		err := metric.Write(&m)
+		if err != nil {
+			t.Fatalf("unexpected error while extracting Prometheus metrics: %v", err)
+		}
+
+		// Only initialize the map if we actually have a value.
+		if *cts == nil {
+			*cts = counts{}
+		}
+
+		// We know that our counters have exactly one label.
+		count := (*cts)[*m.Label[0].Value]
+		if success {
+			count.success++
+		} else {
+			count.failed++
+		}
+		(*cts)[*m.Label[0].Value] = count
+	}
+}
+
 func newTestProvisionController(
 	client kubernetes.Interface,
 	provisionerName string,
 	provisioner Provisioner,
 	serverGitVersion string,
-) *ProvisionController {
+) testProvisionController {
+	m := metrics.New(string(uuid.NewUUID()))
 	ctrl := NewProvisionController(
 		client,
 		provisionerName,
 		provisioner,
 		serverGitVersion,
+		MetricsInstance(m),
 		ResyncPeriod(resyncPeriod),
 		CreateProvisionedPVInterval(10*time.Millisecond),
 		LeaseDuration(2*resyncPeriod),
 		RenewDeadline(resyncPeriod),
 		RetryPeriod(resyncPeriod/2))
-	return ctrl
+	return testProvisionController{
+		ProvisionController: ctrl,
+		metrics:             &m,
+	}
 }
 
 func newTestProvisionControllerWithAdditionalNames(
@@ -1014,19 +1185,24 @@ func newTestProvisionControllerWithAdditionalNames(
 	provisioner Provisioner,
 	serverGitVersion string,
 	additionalProvisionerNames []string,
-) *ProvisionController {
+) testProvisionController {
+	m := metrics.New(string(uuid.NewUUID()))
 	ctrl := NewProvisionController(
 		client,
 		provisionerName,
 		provisioner,
 		serverGitVersion,
+		MetricsInstance(m),
 		ResyncPeriod(resyncPeriod),
 		CreateProvisionedPVInterval(10*time.Millisecond),
 		LeaseDuration(2*resyncPeriod),
 		RenewDeadline(resyncPeriod),
 		RetryPeriod(resyncPeriod/2),
 		AdditionalProvisionerNames(additionalProvisionerNames))
-	return ctrl
+	return testProvisionController{
+		ProvisionController: ctrl,
+		metrics:             &m,
+	}
 }
 
 func newTestProvisionControllerSharedInformers(
@@ -1131,7 +1307,8 @@ func newClaim(name, claimUID, class, provisioner, volumeName string, annotations
 					v1.ResourceName(v1.ResourceStorage): resource.MustParse("1Mi"),
 				},
 			},
-			VolumeName: volumeName,
+			VolumeName:       volumeName,
+			StorageClassName: &class,
 		},
 		Status: v1.PersistentVolumeClaimStatus{
 			Phase: v1.ClaimPending,
