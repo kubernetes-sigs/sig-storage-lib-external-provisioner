@@ -1031,6 +1031,7 @@ func (ctrl *ProvisionController) syncClaim(obj interface{}) error {
 
 	should, err := ctrl.shouldProvision(claim)
 	if err != nil {
+		ctrl.updateProvisionStats(claim, err, time.Time{})
 		return err
 	} else if should {
 		startTime := time.Now()
