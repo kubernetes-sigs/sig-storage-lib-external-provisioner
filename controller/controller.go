@@ -52,8 +52,8 @@ import (
 	ref "k8s.io/client-go/tools/reference"
 	"k8s.io/client-go/util/workqueue"
 	glog "k8s.io/klog"
-	"sigs.k8s.io/sig-storage-lib-external-provisioner/controller/metrics"
-	"sigs.k8s.io/sig-storage-lib-external-provisioner/util"
+	"sigs.k8s.io/sig-storage-lib-external-provisioner/v5/controller/metrics"
+	"sigs.k8s.io/sig-storage-lib-external-provisioner/v5/util"
 )
 
 // annClass annotation represents the storage class associated with a resource:
