@@ -23,7 +23,7 @@ import (
 	"testing"
 	"time"
 
-	"sigs.k8s.io/sig-storage-lib-external-provisioner/controller/metrics"
+	"sigs.k8s.io/sig-storage-lib-external-provisioner/v5/controller/metrics"
 
 	"github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
