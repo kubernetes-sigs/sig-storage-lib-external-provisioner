@@ -17,13 +17,14 @@ limitations under the License.
 package gidallocator
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"strconv"
 	"strings"
 	"sync"
 
-	"k8s.io/api/core/v1"
+	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	glog "k8s.io/klog"
@@ -88,7 +89,7 @@ func (a *Allocator) AllocateNext(options controller.ProvisionOptions) (int, erro
 // Release releases the given volume's allocated GID from the appropriate GID
 // table.
 func (a *Allocator) Release(volume *v1.PersistentVolume) error {
-	class, err := a.client.StorageV1().StorageClasses().Get(util.GetPersistentVolumeClass(volume), metav1.GetOptions{})
+	class, err := a.client.StorageV1().StorageClasses().Get(context.TODO(), util.GetPersistentVolumeClass(volume), metav1.GetOptions{})
 	gidMin, gidMax, err := parseClassParameters(class.Parameters)
 	if err != nil {
 		return err
@@ -175,7 +176,7 @@ func (a *Allocator) getGidTable(className string, min int, max int) (*allocator.
 // in a given storage class, and mark them in the table.
 //
 func (a *Allocator) collectGids(className string, gidTable *allocator.MinMaxAllocator) error {
-	pvList, err := a.client.CoreV1().PersistentVolumes().List(metav1.ListOptions{})
+	pvList, err := a.client.CoreV1().PersistentVolumes().List(context.TODO(), metav1.ListOptions{})
 	if err != nil {
 		glog.Errorf("failed to get existing persistent volumes")
 		return err
