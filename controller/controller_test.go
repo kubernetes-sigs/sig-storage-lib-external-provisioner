@@ -17,17 +17,16 @@ limitations under the License.
 package controller
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"reflect"
 	"testing"
 	"time"
 
-	"sigs.k8s.io/sig-storage-lib-external-provisioner/v5/controller/metrics"
-
 	"github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
-	"k8s.io/api/core/v1"
+	v1 "k8s.io/api/core/v1"
 	storage "k8s.io/api/storage/v1"
 	storagebeta "k8s.io/api/storage/v1beta1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -47,6 +46,7 @@ import (
 	ref "k8s.io/client-go/tools/reference"
 	"k8s.io/client-go/util/workqueue"
 	"k8s.io/klog"
+	"sigs.k8s.io/sig-storage-lib-external-provisioner/v5/controller/metrics"
 )
 
 const (
@@ -640,7 +640,7 @@ func TestController(t *testing.T) {
 
 			time.Sleep(2 * resyncPeriod)
 
-			pvList, _ := client.CoreV1().PersistentVolumes().List(metav1.ListOptions{})
+			pvList, _ := client.CoreV1().PersistentVolumes().List(context.TODO(), metav1.ListOptions{})
 			if !reflect.DeepEqual(test.expectedVolumes, pvList.Items) {
 				t.Errorf("expected PVs:\n %v\n but got:\n %v\n", test.expectedVolumes, pvList.Items)
 			}
@@ -686,7 +686,7 @@ func TestController(t *testing.T) {
 			}
 
 			if test.expectedClaims != nil {
-				pvcList, _ := client.CoreV1().PersistentVolumeClaims(v1.NamespaceDefault).List(metav1.ListOptions{})
+				pvcList, _ := client.CoreV1().PersistentVolumeClaims(v1.NamespaceDefault).List(context.TODO(), metav1.ListOptions{})
 				if !reflect.DeepEqual(test.expectedClaims, pvcList.Items) {
 					t.Errorf("expected PVCs:\n %v\n but got:\n %v\n", test.expectedClaims, pvcList.Items)
 				}
@@ -1237,7 +1237,7 @@ func TestControllerSharedInformers(t *testing.T) {
 			informersFactory.WaitForCacheSync(stopCh)
 			time.Sleep(2 * sharedResyncPeriod)
 
-			pvList, _ := client.CoreV1().PersistentVolumes().List(metav1.ListOptions{})
+			pvList, _ := client.CoreV1().PersistentVolumes().List(context.TODO(), metav1.ListOptions{})
 			if (len(test.expectedVolumes) > 0 || len(pvList.Items) > 0) &&
 				!reflect.DeepEqual(test.expectedVolumes, pvList.Items) {
 				t.Errorf("expected PVs:\n %v\n but got:\n %v\n", test.expectedVolumes, pvList.Items)

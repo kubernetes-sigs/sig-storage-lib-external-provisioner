@@ -22,14 +22,14 @@ import (
 	"sync"
 	"time"
 
-	"k8s.io/client-go/tools/record"
-
 	v1 "k8s.io/api/core/v1"
 	apierrs "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/cache"
+	"k8s.io/client-go/tools/record"
 	"k8s.io/client-go/util/workqueue"
 	"k8s.io/klog"
 )
@@ -152,7 +152,7 @@ func (q *queueStore) processNextWorkItem() bool {
 
 func (q *queueStore) doSaveVolume(volume *v1.PersistentVolume) error {
 	klog.V(5).Infof("Saving volume %s", volume.Name)
-	_, err := q.client.CoreV1().PersistentVolumes().Create(volume)
+	_, err := q.client.CoreV1().PersistentVolumes().Create(context.TODO(), volume, metav1.CreateOptions{})
 	if err == nil || apierrs.IsAlreadyExists(err) {
 		klog.V(5).Infof("Volume %s saved", volume.Name)
 		q.sendSuccessEvent(volume)
@@ -211,7 +211,7 @@ func (b *backoffStore) StoreVolume(claim *v1.PersistentVolumeClaim, volume *v1.P
 	err := wait.ExponentialBackoff(*b.backoff, func() (bool, error) {
 		klog.Infof("Trying to save persistentvolume %q", volume.Name)
 		var err error
-		if _, err = b.client.CoreV1().PersistentVolumes().Create(volume); err == nil || apierrs.IsAlreadyExists(err) {
+		if _, err = b.client.CoreV1().PersistentVolumes().Create(context.TODO(), volume, metav1.CreateOptions{}); err == nil || apierrs.IsAlreadyExists(err) {
 			// Save succeeded.
 			if err != nil {
 				klog.Infof("persistentvolume %q already exists, reusing", volume.Name)

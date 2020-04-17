@@ -17,12 +17,14 @@ limitations under the License.
 package util
 
 import (
+	"context"
+	"net"
+
 	"github.com/miekg/dns"
-	"k8s.io/api/core/v1"
+	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	glog "k8s.io/klog"
-	"net"
 )
 
 // Common allocation units
@@ -103,10 +105,10 @@ func FindDNSIP(client kubernetes.Interface) (dnsip string) {
 	// find DNS server address through client API
 	// cache result in rbdProvisioner
 	var dnssvc *v1.Service
-	coredns, err := client.CoreV1().Services(metav1.NamespaceSystem).Get("coredns", metav1.GetOptions{})
+	coredns, err := client.CoreV1().Services(metav1.NamespaceSystem).Get(context.TODO(), "coredns", metav1.GetOptions{})
 	if err != nil {
 		glog.Warningf("error getting coredns service: %v. Falling back to kube-dns\n", err)
-		kubedns, err := client.CoreV1().Services(metav1.NamespaceSystem).Get("kube-dns", metav1.GetOptions{})
+		kubedns, err := client.CoreV1().Services(metav1.NamespaceSystem).Get(context.TODO(), "kube-dns", metav1.GetOptions{})
 		if err != nil {
 			glog.Errorf("error getting kube-dns service: %v\n", err)
 			return ""
