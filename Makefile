@@ -19,8 +19,12 @@ dep:
 
 verify: dep
 	# todo gometalinter is DEPRECATED, Use https://github.com/golangci/golangci-lint
-	GO111MODULE=off go get -u github.com/alecthomas/gometalinter
-	GO111MODULE=off gometalinter --install
+	go env
+	export PATH=$(PATH):/home/prow/go/:/usr/local/go
+	echo $(PATH)
+	#GO111MODULE=off go get -u github.com/alecthomas/gometalinter
+	#GO111MODULE=off gometalinter --install
+	curl https://raw.githubusercontent.com/alecthomas/gometalinter/master/scripts/install.sh | sh
 	repo-infra/verify/verify-go-src.sh -v
 	repo-infra/verify/verify-boilerplate.sh
 
