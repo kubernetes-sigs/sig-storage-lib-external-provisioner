@@ -12,25 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-all: verify test
+all: test
 
-dep:
-	go mod tidy
+include release-tools/build.make
 
-verify: dep
-	# todo gometalinter is DEPRECATED, Use https://github.com/golangci/golangci-lint
-	go env
-	export PATH=$(PATH):/home/prow/go/:/usr/local/go
-	echo $(PATH)
-	#GO111MODULE=off go get -u github.com/alecthomas/gometalinter
-	#GO111MODULE=off gometalinter --install
-	curl https://raw.githubusercontent.com/alecthomas/gometalinter/master/scripts/install.sh | sh
-	repo-infra/verify/verify-go-src.sh -v
-	repo-infra/verify/verify-boilerplate.sh
-
-test: dep
-	go test ./controller
-	go test ./allocator
-
-clean:
-	rm -rf ./test/e2e/kubernetes
