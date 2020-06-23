@@ -101,14 +101,14 @@ func CheckPersistentVolumeClaimModeBlock(pvc *v1.PersistentVolumeClaim) bool {
 }
 
 // FindDNSIP looks up the cluster DNS service by label "coredns", falling back to "kube-dns" if not found
-func FindDNSIP(client kubernetes.Interface) (dnsip string) {
+func FindDNSIP(ctx context.Context, client kubernetes.Interface) (dnsip string) {
 	// find DNS server address through client API
 	// cache result in rbdProvisioner
 	var dnssvc *v1.Service
-	coredns, err := client.CoreV1().Services(metav1.NamespaceSystem).Get(context.TODO(), "coredns", metav1.GetOptions{})
+	coredns, err := client.CoreV1().Services(metav1.NamespaceSystem).Get(ctx, "coredns", metav1.GetOptions{})
 	if err != nil {
 		glog.Warningf("error getting coredns service: %v. Falling back to kube-dns\n", err)
-		kubedns, err := client.CoreV1().Services(metav1.NamespaceSystem).Get(context.TODO(), "kube-dns", metav1.GetOptions{})
+		kubedns, err := client.CoreV1().Services(metav1.NamespaceSystem).Get(ctx, "kube-dns", metav1.GetOptions{})
 		if err != nil {
 			glog.Errorf("error getting kube-dns service: %v\n", err)
 			return ""
