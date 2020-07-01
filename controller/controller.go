@@ -52,8 +52,8 @@ import (
 	ref "k8s.io/client-go/tools/reference"
 	"k8s.io/client-go/util/workqueue"
 	glog "k8s.io/klog"
-	"sigs.k8s.io/sig-storage-lib-external-provisioner/v5/controller/metrics"
-	"sigs.k8s.io/sig-storage-lib-external-provisioner/v5/util"
+	"sigs.k8s.io/sig-storage-lib-external-provisioner/v6/controller/metrics"
+	"sigs.k8s.io/sig-storage-lib-external-provisioner/v6/util"
 )
 
 // annClass annotation represents the storage class associated with a resource:
@@ -146,7 +146,9 @@ type ProvisionController struct {
 	component     string
 	eventRecorder record.EventRecorder
 
-	resyncPeriod time.Duration
+	resyncPeriod     time.Duration
+	provisionTimeout time.Duration
+	deletionTimeout  time.Duration
 
 	rateLimiter               workqueue.RateLimiter
 	exponentialBackOffOnError bool
@@ -564,6 +566,30 @@ func AddFinalizer(addFinalizer bool) func(*ProvisionController) error {
 	}
 }
 
+// ProvisionTimeout sets the amount of time that provisioning a volume may take.
+// The default is unlimited.
+func ProvisionTimeout(timeout time.Duration) func(*ProvisionController) error {
+	return func(c *ProvisionController) error {
+		if c.HasRun() {
+			return errRuntime
+		}
+		c.provisionTimeout = timeout
+		return nil
+	}
+}
+
+// DeletionTimeout sets the amount of time that deleting a volume may take.
+// The default is unlimited.
+func DeletionTimeout(timeout time.Duration) func(*ProvisionController) error {
+	return func(c *ProvisionController) error {
+		if c.HasRun() {
+			return errRuntime
+		}
+		c.deletionTimeout = timeout
+		return nil
+	}
+}
+
 // HasRun returns whether the controller has Run
 func (ctrl *ProvisionController) HasRun() bool {
 	ctrl.hasRunLock.Lock()
@@ -789,12 +815,7 @@ func (ctrl *ProvisionController) forgetVolume(obj interface{}) {
 }
 
 // Run starts all of this controller's control loops
-func (ctrl *ProvisionController) Run(_ <-chan struct{}) {
-	// TODO: arg is as of 1.12 unused. Nothing can ever be cancelled. Should
-	// accept a context instead and use it instead of context.TODO(), but would
-	// break API. Not urgent: realistically, users are simply passing in
-	// wait.NeverStop() anyway.
-
+func (ctrl *ProvisionController) Run(ctx context.Context) {
 	run := func(ctx context.Context) {
 		glog.Infof("Starting provisioner controller %s!", ctrl.component)
 		defer utilruntime.HandleCrash()
@@ -841,8 +862,8 @@ func (ctrl *ProvisionController) Run(_ <-chan struct{}) {
 		}
 
 		for i := 0; i < ctrl.threadiness; i++ {
-			go wait.Until(ctrl.runClaimWorker, time.Second, context.TODO().Done())
-			go wait.Until(ctrl.runVolumeWorker, time.Second, context.TODO().Done())
+			go wait.Until(func() { ctrl.runClaimWorker(ctx) }, time.Second, ctx.Done())
+			go wait.Until(func() { ctrl.runVolumeWorker(ctx) }, time.Second, ctx.Done())
 		}
 
 		glog.Infof("Started provisioner controller %s!", ctrl.component)
@@ -850,7 +871,7 @@ func (ctrl *ProvisionController) Run(_ <-chan struct{}) {
 		select {}
 	}
 
-	go ctrl.volumeStore.Run(context.TODO(), DefaultThreadiness)
+	go ctrl.volumeStore.Run(ctx, DefaultThreadiness)
 
 	if ctrl.leaderElection {
 		rl, err := resourcelock.New("endpoints",
@@ -866,7 +887,7 @@ func (ctrl *ProvisionController) Run(_ <-chan struct{}) {
 			glog.Fatalf("Error creating lock: %v", err)
 		}
 
-		leaderelection.RunOrDie(context.TODO(), leaderelection.LeaderElectionConfig{
+		leaderelection.RunOrDie(ctx, leaderelection.LeaderElectionConfig{
 			Lock:          rl,
 			LeaseDuration: ctrl.leaseDuration,
 			RenewDeadline: ctrl.renewDeadline,
@@ -880,29 +901,35 @@ func (ctrl *ProvisionController) Run(_ <-chan struct{}) {
 		})
 		panic("unreachable")
 	} else {
-		run(context.TODO())
+		run(ctx)
 	}
 }
 
-func (ctrl *ProvisionController) runClaimWorker() {
-	for ctrl.processNextClaimWorkItem() {
+func (ctrl *ProvisionController) runClaimWorker(ctx context.Context) {
+	for ctrl.processNextClaimWorkItem(ctx) {
 	}
 }
 
-func (ctrl *ProvisionController) runVolumeWorker() {
-	for ctrl.processNextVolumeWorkItem() {
+func (ctrl *ProvisionController) runVolumeWorker(ctx context.Context) {
+	for ctrl.processNextVolumeWorkItem(ctx) {
 	}
 }
 
 // processNextClaimWorkItem processes items from claimQueue
-func (ctrl *ProvisionController) processNextClaimWorkItem() bool {
+func (ctrl *ProvisionController) processNextClaimWorkItem(ctx context.Context) bool {
 	obj, shutdown := ctrl.claimQueue.Get()
 
 	if shutdown {
 		return false
 	}
 
-	err := func(obj interface{}) error {
+	err := func() error {
+		// Apply per-operation timeout.
+		if ctrl.provisionTimeout != 0 {
+			timeout, cancel := context.WithTimeout(ctx, ctrl.provisionTimeout)
+			defer cancel()
+			ctx = timeout
+		}
 		defer ctrl.claimQueue.Done(obj)
 		var key string
 		var ok bool
@@ -911,7 +938,7 @@ func (ctrl *ProvisionController) processNextClaimWorkItem() bool {
 			return fmt.Errorf("expected string in workqueue but got %#v", obj)
 		}
 
-		if err := ctrl.syncClaimHandler(key); err != nil {
+		if err := ctrl.syncClaimHandler(ctx, key); err != nil {
 			if ctrl.failedProvisionThreshold == 0 {
 				glog.Warningf("Retrying syncing claim %q, failure %v", key, ctrl.claimQueue.NumRequeues(obj))
 				ctrl.claimQueue.AddRateLimited(obj)
@@ -933,7 +960,7 @@ func (ctrl *ProvisionController) processNextClaimWorkItem() bool {
 		// or the PVC was ignored by this provisioner.
 		ctrl.claimsInProgress.Delete(key)
 		return nil
-	}(obj)
+	}()
 
 	if err != nil {
 		utilruntime.HandleError(err)
@@ -944,14 +971,20 @@ func (ctrl *ProvisionController) processNextClaimWorkItem() bool {
 }
 
 // processNextVolumeWorkItem processes items from volumeQueue
-func (ctrl *ProvisionController) processNextVolumeWorkItem() bool {
+func (ctrl *ProvisionController) processNextVolumeWorkItem(ctx context.Context) bool {
 	obj, shutdown := ctrl.volumeQueue.Get()
 
 	if shutdown {
 		return false
 	}
 
-	err := func(obj interface{}) error {
+	err := func() error {
+		// Apply per-operation timeout.
+		if ctrl.deletionTimeout != 0 {
+			timeout, cancel := context.WithTimeout(ctx, ctrl.deletionTimeout)
+			defer cancel()
+			ctx = timeout
+		}
 		defer ctrl.volumeQueue.Done(obj)
 		var key string
 		var ok bool
@@ -960,7 +993,7 @@ func (ctrl *ProvisionController) processNextVolumeWorkItem() bool {
 			return fmt.Errorf("expected string in workqueue but got %#v", obj)
 		}
 
-		if err := ctrl.syncVolumeHandler(key); err != nil {
+		if err := ctrl.syncVolumeHandler(ctx, key); err != nil {
 			if ctrl.failedDeleteThreshold == 0 {
 				glog.Warningf("Retrying syncing volume %q, failure %v", key, ctrl.volumeQueue.NumRequeues(obj))
 				ctrl.volumeQueue.AddRateLimited(obj)
@@ -977,7 +1010,7 @@ func (ctrl *ProvisionController) processNextVolumeWorkItem() bool {
 
 		ctrl.volumeQueue.Forget(obj)
 		return nil
-	}(obj)
+	}()
 
 	if err != nil {
 		utilruntime.HandleError(err)
@@ -988,7 +1021,7 @@ func (ctrl *ProvisionController) processNextVolumeWorkItem() bool {
 }
 
 // syncClaimHandler gets the claim from informer's cache then calls syncClaim. A non-nil error triggers requeuing of the claim.
-func (ctrl *ProvisionController) syncClaimHandler(key string) error {
+func (ctrl *ProvisionController) syncClaimHandler(ctx context.Context, key string) error {
 	objs, err := ctrl.claimsIndexer.ByIndex(uidIndex, key)
 	if err != nil {
 		return err
@@ -1004,11 +1037,11 @@ func (ctrl *ProvisionController) syncClaimHandler(key string) error {
 		}
 		claimObj = obj
 	}
-	return ctrl.syncClaim(claimObj)
+	return ctrl.syncClaim(ctx, claimObj)
 }
 
 // syncVolumeHandler gets the volume from informer's cache then calls syncVolume
-func (ctrl *ProvisionController) syncVolumeHandler(key string) error {
+func (ctrl *ProvisionController) syncVolumeHandler(ctx context.Context, key string) error {
 	volumeObj, exists, err := ctrl.volumes.GetByKey(key)
 	if err != nil {
 		return err
@@ -1018,25 +1051,25 @@ func (ctrl *ProvisionController) syncVolumeHandler(key string) error {
 		return nil
 	}
 
-	return ctrl.syncVolume(volumeObj)
+	return ctrl.syncVolume(ctx, volumeObj)
 }
 
 // syncClaim checks if the claim should have a volume provisioned for it and
 // provisions one if so. Returns an error if the claim is to be requeued.
-func (ctrl *ProvisionController) syncClaim(obj interface{}) error {
+func (ctrl *ProvisionController) syncClaim(ctx context.Context, obj interface{}) error {
 	claim, ok := obj.(*v1.PersistentVolumeClaim)
 	if !ok {
 		return fmt.Errorf("expected claim but got %+v", obj)
 	}
 
-	should, err := ctrl.shouldProvision(claim)
+	should, err := ctrl.shouldProvision(ctx, claim)
 	if err != nil {
 		ctrl.updateProvisionStats(claim, err, time.Time{})
 		return err
 	} else if should {
 		startTime := time.Now()
 
-		status, err := ctrl.provisionClaimOperation(claim)
+		status, err := ctrl.provisionClaimOperation(ctx, claim)
 		ctrl.updateProvisionStats(claim, err, startTime)
 		if err == nil || status == ProvisioningFinished {
 			// Provisioning is 100% finished / not in progress.
@@ -1069,15 +1102,15 @@ func (ctrl *ProvisionController) syncClaim(obj interface{}) error {
 }
 
 // syncVolume checks if the volume should be deleted and deletes if so
-func (ctrl *ProvisionController) syncVolume(obj interface{}) error {
+func (ctrl *ProvisionController) syncVolume(ctx context.Context, obj interface{}) error {
 	volume, ok := obj.(*v1.PersistentVolume)
 	if !ok {
 		return fmt.Errorf("expected volume but got %+v", obj)
 	}
 
-	if ctrl.shouldDelete(volume) {
+	if ctrl.shouldDelete(ctx, volume) {
 		startTime := time.Now()
-		err := ctrl.deleteVolumeOperation(volume)
+		err := ctrl.deleteVolumeOperation(ctx, volume)
 		ctrl.updateDeleteStats(volume, err, startTime)
 		return err
 	}
@@ -1100,13 +1133,13 @@ func (ctrl *ProvisionController) knownProvisioner(provisioner string) bool {
 
 // shouldProvision returns whether a claim should have a volume provisioned for
 // it, i.e. whether a Provision is "desired"
-func (ctrl *ProvisionController) shouldProvision(claim *v1.PersistentVolumeClaim) (bool, error) {
+func (ctrl *ProvisionController) shouldProvision(ctx context.Context, claim *v1.PersistentVolumeClaim) (bool, error) {
 	if claim.Spec.VolumeName != "" {
 		return false, nil
 	}
 
 	if qualifier, ok := ctrl.provisioner.(Qualifier); ok {
-		if !qualifier.ShouldProvision(claim) {
+		if !qualifier.ShouldProvision(ctx, claim) {
 			return false, nil
 		}
 	}
@@ -1154,9 +1187,9 @@ func (ctrl *ProvisionController) shouldProvision(claim *v1.PersistentVolumeClaim
 
 // shouldDelete returns whether a volume should have its backing volume
 // deleted, i.e. whether a Delete is "desired"
-func (ctrl *ProvisionController) shouldDelete(volume *v1.PersistentVolume) bool {
+func (ctrl *ProvisionController) shouldDelete(ctx context.Context, volume *v1.PersistentVolume) bool {
 	if deletionGuard, ok := ctrl.provisioner.(DeletionGuard); ok {
-		if !deletionGuard.ShouldDelete(volume) {
+		if !deletionGuard.ShouldDelete(ctx, volume) {
 			return false
 		}
 	}
@@ -1201,9 +1234,9 @@ func (ctrl *ProvisionController) shouldDelete(volume *v1.PersistentVolume) bool 
 }
 
 // canProvision returns error if provisioner can't provision claim.
-func (ctrl *ProvisionController) canProvision(claim *v1.PersistentVolumeClaim) error {
+func (ctrl *ProvisionController) canProvision(ctx context.Context, claim *v1.PersistentVolumeClaim) error {
 	// Check if this provisioner supports Block volume
-	if util.CheckPersistentVolumeClaimModeBlock(claim) && !ctrl.supportsBlock() {
+	if util.CheckPersistentVolumeClaimModeBlock(claim) && !ctrl.supportsBlock(ctx) {
 		return fmt.Errorf("%s does not support block volume provisioning", ctrl.provisionerName)
 	}
 
@@ -1244,7 +1277,7 @@ func (ctrl *ProvisionController) updateDeleteStats(volume *v1.PersistentVolume, 
 
 // rescheduleProvisioning signal back to the scheduler to retry dynamic provisioning
 // by removing the annSelectedNode annotation
-func (ctrl *ProvisionController) rescheduleProvisioning(claim *v1.PersistentVolumeClaim) error {
+func (ctrl *ProvisionController) rescheduleProvisioning(ctx context.Context, claim *v1.PersistentVolumeClaim) error {
 	if _, ok := claim.Annotations[annSelectedNode]; !ok {
 		// Provisioning not triggered by the scheduler, skip
 		return nil
@@ -1255,7 +1288,7 @@ func (ctrl *ProvisionController) rescheduleProvisioning(claim *v1.PersistentVolu
 	newClaim := claim.DeepCopy()
 	delete(newClaim.Annotations, annSelectedNode)
 	// Try to update the PVC object
-	if _, err := ctrl.client.CoreV1().PersistentVolumeClaims(newClaim.Namespace).Update(context.TODO(), newClaim, metav1.UpdateOptions{}); err != nil {
+	if _, err := ctrl.client.CoreV1().PersistentVolumeClaims(newClaim.Namespace).Update(ctx, newClaim, metav1.UpdateOptions{}); err != nil {
 		return fmt.Errorf("delete annotation 'annSelectedNode' for PersistentVolumeClaim %q: %v", claimToClaimKey(newClaim), err)
 	}
 
@@ -1277,7 +1310,7 @@ func (ctrl *ProvisionController) rescheduleProvisioning(claim *v1.PersistentVolu
 // Returns nil error only when the volume was provisioned (in which case it also returns ProvisioningFinished),
 // a normal error when the volume was not provisioned and provisioning should be retried (requeue the claim),
 // or the special errStopProvision when provisioning was impossible and no further attempts to provision should be tried.
-func (ctrl *ProvisionController) provisionClaimOperation(claim *v1.PersistentVolumeClaim) (ProvisioningState, error) {
+func (ctrl *ProvisionController) provisionClaimOperation(ctx context.Context, claim *v1.PersistentVolumeClaim) (ProvisioningState, error) {
 	// Most code here is identical to that found in controller.go of kube's PV controller...
 	claimClass := util.GetPersistentVolumeClaimClass(claim)
 	operation := fmt.Sprintf("provision %q class %q", claimToClaimKey(claim), claimClass)
@@ -1287,7 +1320,7 @@ func (ctrl *ProvisionController) provisionClaimOperation(claim *v1.PersistentVol
 	//  the locks. Check that PV (with deterministic name) hasn't been provisioned
 	//  yet.
 	pvName := ctrl.getProvisionedVolumeNameForClaim(claim)
-	volume, err := ctrl.client.CoreV1().PersistentVolumes().Get(context.TODO(), pvName, metav1.GetOptions{})
+	volume, err := ctrl.client.CoreV1().PersistentVolumes().Get(ctx, pvName, metav1.GetOptions{})
 	if err == nil && volume != nil {
 		// Volume has been already provisioned, nothing to do.
 		glog.Info(logOperation(operation, "persistentvolume %q already exists, skipping", pvName))
@@ -1303,7 +1336,7 @@ func (ctrl *ProvisionController) provisionClaimOperation(claim *v1.PersistentVol
 	}
 
 	// Check if this provisioner can provision this claim.
-	if err = ctrl.canProvision(claim); err != nil {
+	if err = ctrl.canProvision(ctx, claim); err != nil {
 		ctrl.eventRecorder.Event(claim, v1.EventTypeWarning, "ProvisioningFailed", err.Error())
 		glog.Error(logOperation(operation, "failed to provision volume: %v", err))
 		return ProvisioningFinished, errStopProvision
@@ -1328,7 +1361,7 @@ func (ctrl *ProvisionController) provisionClaimOperation(claim *v1.PersistentVol
 	if ctrl.kubeVersion.AtLeast(utilversion.MustParseSemantic("v1.11.0")) {
 		// Get SelectedNode
 		if nodeName, ok := getString(claim.Annotations, annSelectedNode, annAlphaSelectedNode); ok {
-			selectedNode, err = ctrl.client.CoreV1().Nodes().Get(context.TODO(), nodeName, metav1.GetOptions{}) // TODO (verult) cache Nodes
+			selectedNode, err = ctrl.client.CoreV1().Nodes().Get(ctx, nodeName, metav1.GetOptions{}) // TODO (verult) cache Nodes
 			if err != nil {
 				err = fmt.Errorf("failed to get target node: %v", err)
 				ctrl.eventRecorder.Event(claim, v1.EventTypeWarning, "ProvisioningFailed", err.Error())
@@ -1346,12 +1379,7 @@ func (ctrl *ProvisionController) provisionClaimOperation(claim *v1.PersistentVol
 
 	ctrl.eventRecorder.Event(claim, v1.EventTypeNormal, "Provisioning", fmt.Sprintf("External provisioner is provisioning volume for claim %q", claimToClaimKey(claim)))
 
-	result := ProvisioningFinished
-	if p, ok := ctrl.provisioner.(ProvisionerExt); ok {
-		volume, result, err = p.ProvisionExt(options)
-	} else {
-		volume, err = ctrl.provisioner.Provision(options)
-	}
+	volume, result, err := ctrl.provisioner.Provision(ctx, options)
 	if err != nil {
 		if ierr, ok := err.(*IgnoredError); ok {
 			// Provision ignored, do nothing and hope another provisioner will provision it.
@@ -1368,7 +1396,7 @@ func (ctrl *ProvisionController) provisionClaimOperation(claim *v1.PersistentVol
 			// as state.
 			//
 			// `selectedNode` must be removed to notify scheduler to schedule again.
-			if errLabel := ctrl.rescheduleProvisioning(claim); errLabel != nil {
+			if errLabel := ctrl.rescheduleProvisioning(ctx, claim); errLabel != nil {
 				glog.Info(logOperation(operation, "volume rescheduling failed: %v", errLabel))
 				// If unsetting that label fails in ctrl.rescheduleProvisioning, we
 				// keep the volume in the work queue as if the provisioner had
@@ -1417,7 +1445,7 @@ func (ctrl *ProvisionController) provisionClaimOperation(claim *v1.PersistentVol
 // deleteVolumeOperation attempts to delete the volume backing the given
 // volume. Returns error, which indicates whether deletion should be retried
 // (requeue the volume) or not
-func (ctrl *ProvisionController) deleteVolumeOperation(volume *v1.PersistentVolume) error {
+func (ctrl *ProvisionController) deleteVolumeOperation(ctx context.Context, volume *v1.PersistentVolume) error {
 	operation := fmt.Sprintf("delete %q", volume.Name)
 	glog.Info(logOperation(operation, "started"))
 
@@ -1425,16 +1453,16 @@ func (ctrl *ProvisionController) deleteVolumeOperation(volume *v1.PersistentVolu
 	// Our check does not have to be as sophisticated as PV controller's, we can
 	// trust that the PV controller has set the PV to Released/Failed and it's
 	// ours to delete
-	newVolume, err := ctrl.client.CoreV1().PersistentVolumes().Get(context.TODO(), volume.Name, metav1.GetOptions{})
+	newVolume, err := ctrl.client.CoreV1().PersistentVolumes().Get(ctx, volume.Name, metav1.GetOptions{})
 	if err != nil {
 		return nil
 	}
-	if !ctrl.shouldDelete(newVolume) {
+	if !ctrl.shouldDelete(ctx, newVolume) {
 		glog.Info(logOperation(operation, "persistentvolume no longer needs deletion, skipping"))
 		return nil
 	}
 
-	err = ctrl.provisioner.Delete(volume)
+	err = ctrl.provisioner.Delete(ctx, volume)
 	if err != nil {
 		if ierr, ok := err.(*IgnoredError); ok {
 			// Delete ignored, do nothing and hope another provisioner will delete it.
@@ -1450,7 +1478,7 @@ func (ctrl *ProvisionController) deleteVolumeOperation(volume *v1.PersistentVolu
 	glog.Info(logOperation(operation, "volume deleted"))
 
 	// Delete the volume
-	if err = ctrl.client.CoreV1().PersistentVolumes().Delete(context.TODO(), volume.Name, metav1.DeleteOptions{}); err != nil {
+	if err = ctrl.client.CoreV1().PersistentVolumes().Delete(ctx, volume.Name, metav1.DeleteOptions{}); err != nil {
 		// Oops, could not delete the volume and therefore the controller will
 		// try to delete the volume again on next update.
 		glog.Info(logOperation(operation, "failed to delete persistentvolume: %v", err))
@@ -1462,7 +1490,7 @@ func (ctrl *ProvisionController) deleteVolumeOperation(volume *v1.PersistentVolu
 			// Remove external-provisioner finalizer
 
 			// need to get the pv again because the delete has updated the object with a deletion timestamp
-			newVolume, err := ctrl.client.CoreV1().PersistentVolumes().Get(context.TODO(), volume.Name, metav1.GetOptions{})
+			newVolume, err := ctrl.client.CoreV1().PersistentVolumes().Get(ctx, volume.Name, metav1.GetOptions{})
 			if err != nil {
 				// If the volume is not found return, otherwise error
 				if !apierrs.IsNotFound(err) {
@@ -1481,7 +1509,7 @@ func (ctrl *ProvisionController) deleteVolumeOperation(volume *v1.PersistentVolu
 			// Only update the finalizers if we actually removed something
 			if len(finalizers) != len(newVolume.ObjectMeta.Finalizers) {
 				newVolume.ObjectMeta.Finalizers = finalizers
-				if _, err = ctrl.client.CoreV1().PersistentVolumes().Update(context.TODO(), newVolume, metav1.UpdateOptions{}); err != nil {
+				if _, err = ctrl.client.CoreV1().PersistentVolumes().Update(ctx, newVolume, metav1.UpdateOptions{}); err != nil {
 					if !apierrs.IsNotFound(err) {
 						// Couldn't remove finalizer and the object still exists, the controller may
 						// try to remove the finalizer again on the next update
@@ -1560,9 +1588,9 @@ func claimToClaimKey(claim *v1.PersistentVolumeClaim) string {
 // supportsBlock returns whether a provisioner supports block volume.
 // Provisioners that implement BlockProvisioner interface and return true to SupportsBlock
 // will be regarded as supported for block volume.
-func (ctrl *ProvisionController) supportsBlock() bool {
+func (ctrl *ProvisionController) supportsBlock(ctx context.Context) bool {
 	if blockProvisioner, ok := ctrl.provisioner.(BlockProvisioner); ok {
-		return blockProvisioner.SupportsBlock()
+		return blockProvisioner.SupportsBlock(ctx)
 	}
 	return false
 }

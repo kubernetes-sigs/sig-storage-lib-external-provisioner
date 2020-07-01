@@ -46,7 +46,7 @@ import (
 	ref "k8s.io/client-go/tools/reference"
 	"k8s.io/client-go/util/workqueue"
 	"k8s.io/klog"
-	"sigs.k8s.io/sig-storage-lib-external-provisioner/v5/controller/metrics"
+	"sigs.k8s.io/sig-storage-lib-external-provisioner/v6/controller/metrics"
 )
 
 const (
@@ -344,7 +344,7 @@ func TestController(t *testing.T) {
 				newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil),
 			},
 			provisionerName: "foo.bar/baz",
-			provisioner:     newExtProvisioner(t, "pvc-uid-1-1", ProvisioningFinished, nil),
+			provisioner:     newProvisioner(t, "pvc-uid-1-1", ProvisioningFinished, nil),
 			expectedVolumes: []v1.PersistentVolume{
 				*newProvisionedVolume(newBetaStorageClass("class-1", "foo.bar/baz", nil), newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil)),
 			},
@@ -361,7 +361,7 @@ func TestController(t *testing.T) {
 				newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil),
 			},
 			provisionerName:          "foo.bar/baz",
-			provisioner:              newExtProvisioner(t, "pvc-uid-1-1", ProvisioningFinished, fmt.Errorf("mock error")),
+			provisioner:              newProvisioner(t, "pvc-uid-1-1", ProvisioningFinished, fmt.Errorf("mock error")),
 			expectedClaimsInProgress: []string{},
 			expectedMetrics: testMetrics{
 				provisioned: counts{
@@ -376,7 +376,7 @@ func TestController(t *testing.T) {
 				newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil),
 			},
 			provisionerName:          "foo.bar/baz",
-			provisioner:              newExtProvisioner(t, "pvc-uid-1-1", ProvisioningInBackground, fmt.Errorf("mock error")),
+			provisioner:              newProvisioner(t, "pvc-uid-1-1", ProvisioningInBackground, fmt.Errorf("mock error")),
 			expectedClaimsInProgress: []string{"uid-1-1"},
 			expectedMetrics: testMetrics{
 				provisioned: counts{
@@ -391,7 +391,7 @@ func TestController(t *testing.T) {
 				newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil),
 			},
 			provisionerName:          "foo.bar/baz",
-			provisioner:              newExtProvisioner(t, "pvc-uid-1-1", ProvisioningNoChange, fmt.Errorf("mock error")),
+			provisioner:              newProvisioner(t, "pvc-uid-1-1", ProvisioningNoChange, fmt.Errorf("mock error")),
 			expectedClaimsInProgress: []string{},
 			expectedMetrics: testMetrics{
 				provisioned: counts{
@@ -409,7 +409,7 @@ func TestController(t *testing.T) {
 				newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil),
 			},
 			provisionerName:          "foo.bar/baz",
-			provisioner:              newExtProvisioner(t, "pvc-uid-1-1", ProvisioningFinished, fmt.Errorf("mock error")),
+			provisioner:              newProvisioner(t, "pvc-uid-1-1", ProvisioningFinished, fmt.Errorf("mock error")),
 			expectedClaimsInProgress: []string{},
 			expectedMetrics: testMetrics{
 				provisioned: counts{
@@ -427,7 +427,7 @@ func TestController(t *testing.T) {
 				newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil),
 			},
 			provisionerName:          "foo.bar/baz",
-			provisioner:              newExtProvisioner(t, "pvc-uid-1-1", ProvisioningInBackground, fmt.Errorf("mock error")),
+			provisioner:              newProvisioner(t, "pvc-uid-1-1", ProvisioningInBackground, fmt.Errorf("mock error")),
 			expectedClaimsInProgress: []string{"uid-1-1"},
 			expectedMetrics: testMetrics{
 				provisioned: counts{
@@ -445,7 +445,7 @@ func TestController(t *testing.T) {
 				newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil),
 			},
 			provisionerName:          "foo.bar/baz",
-			provisioner:              newExtProvisioner(t, "pvc-uid-1-1", ProvisioningNoChange, fmt.Errorf("mock error")),
+			provisioner:              newProvisioner(t, "pvc-uid-1-1", ProvisioningNoChange, fmt.Errorf("mock error")),
 			expectedClaimsInProgress: []string{"uid-1-1"},
 			expectedMetrics: testMetrics{
 				provisioned: counts{
@@ -463,7 +463,7 @@ func TestController(t *testing.T) {
 			},
 			enqueueClaim:             newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil),
 			provisionerName:          "foo.bar/baz",
-			provisioner:              newExtProvisioner(t, "pvc-uid-1-1", ProvisioningFinished, nil),
+			provisioner:              newProvisioner(t, "pvc-uid-1-1", ProvisioningFinished, nil),
 			expectedClaimsInProgress: []string{},
 			expectedVolumes: []v1.PersistentVolume{
 				*newProvisionedVolume(newBetaStorageClass("class-1", "foo.bar/baz", nil), newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil)),
@@ -630,9 +630,8 @@ func TestController(t *testing.T) {
 				ctrl.enqueueClaim(test.enqueueClaim)
 			}
 
-			stopCh := make(chan struct{})
-			go ctrl.Run(stopCh)
-			close(stopCh)
+			// Run forever...
+			go ctrl.Run(context.Background())
 
 			// When we shutdown while something is happening the fake client panics
 			// with send on closed channel...but the test passed, so ignore
@@ -640,7 +639,7 @@ func TestController(t *testing.T) {
 
 			time.Sleep(2 * resyncPeriod)
 
-			pvList, _ := client.CoreV1().PersistentVolumes().List(context.TODO(), metav1.ListOptions{})
+			pvList, _ := client.CoreV1().PersistentVolumes().List(context.Background(), metav1.ListOptions{})
 			if !reflect.DeepEqual(test.expectedVolumes, pvList.Items) {
 				t.Errorf("expected PVs:\n %v\n but got:\n %v\n", test.expectedVolumes, pvList.Items)
 			}
@@ -686,7 +685,7 @@ func TestController(t *testing.T) {
 			}
 
 			if test.expectedClaims != nil {
-				pvcList, _ := client.CoreV1().PersistentVolumeClaims(v1.NamespaceDefault).List(context.TODO(), metav1.ListOptions{})
+				pvcList, _ := client.CoreV1().PersistentVolumeClaims(v1.NamespaceDefault).List(context.Background(), metav1.ListOptions{})
 				if !reflect.DeepEqual(test.expectedClaims, pvcList.Items) {
 					t.Errorf("expected PVCs:\n %v\n but got:\n %v\n", test.expectedClaims, pvcList.Items)
 				}
@@ -768,9 +767,8 @@ func TestTopologyParams(t *testing.T) {
 			provisioner := newTestProvisioner()
 			serverVersion := "v1.11.0"
 			ctrl := newTestProvisionController(client, "foo.bar/baz" /* provisionerName */, provisioner, serverVersion)
-			stopCh := make(chan struct{})
-			go ctrl.Run(stopCh)
-			defer close(stopCh)
+			// Run forever...
+			go ctrl.Run(context.Background())
 
 			// When we shutdown while something is happening the fake client panics
 			// with send on closed channel...but the test passed, so ignore
@@ -966,7 +964,7 @@ func TestShouldProvision(t *testing.T) {
 				}
 			}
 
-			should, err := ctrl.shouldProvision(test.claim)
+			should, err := ctrl.shouldProvision(context.Background(), test.claim)
 			if test.expectedShould != should {
 				t.Errorf("expected should provision %v but got %v\n", test.expectedShould, should)
 			}
@@ -1076,7 +1074,7 @@ func TestShouldDelete(t *testing.T) {
 			ctrl := newTestProvisionController(client, test.provisionerName, provisioner, test.serverGitVersion)
 			test.volume.ObjectMeta.DeletionTimestamp = test.deletionTimestamp
 
-			should := ctrl.shouldDelete(test.volume)
+			should := ctrl.shouldDelete(context.Background(), test.volume)
 			if test.expectedShould != should {
 				t.Errorf("expected should delete %v but got %v\n", test.expectedShould, should)
 			}
@@ -1164,7 +1162,7 @@ func TestCanProvision(t *testing.T) {
 			}
 			ctrl := newTestProvisionController(client, provisionerName, test.provisioner, serverVersion)
 
-			can := ctrl.canProvision(test.claim)
+			can := ctrl.canProvision(context.Background(), test.claim)
 			if !reflect.DeepEqual(test.expectedCan, can) {
 				t.Errorf("expected can provision %v but got %v\n", test.expectedCan, can)
 			}
@@ -1227,8 +1225,9 @@ func TestControllerSharedInformers(t *testing.T) {
 			stopCh := make(chan struct{})
 			defer close(stopCh)
 
-			go ctrl.Run(stopCh)
-			go informersFactory.Start(stopCh)
+			// Run forever...
+			go ctrl.Run(context.Background())
+			go informersFactory.Start(context.Background().Done())
 
 			// When we shutdown while something is happening the fake client panics
 			// with send on closed channel...but the test passed, so ignore
@@ -1237,7 +1236,7 @@ func TestControllerSharedInformers(t *testing.T) {
 			informersFactory.WaitForCacheSync(stopCh)
 			time.Sleep(2 * sharedResyncPeriod)
 
-			pvList, _ := client.CoreV1().PersistentVolumes().List(context.TODO(), metav1.ListOptions{})
+			pvList, _ := client.CoreV1().PersistentVolumes().List(context.Background(), metav1.ListOptions{})
 			if (len(test.expectedVolumes) > 0 || len(pvList.Items) > 0) &&
 				!reflect.DeepEqual(test.expectedVolumes, pvList.Items) {
 				t.Errorf("expected PVs:\n %v\n but got:\n %v\n", test.expectedVolumes, pvList.Items)
@@ -1545,7 +1544,7 @@ func constructProvisionedVolumeWithoutStorageClassInfo(claim *v1.PersistentVolum
 		PVName: "pvc-" + string(claim.ObjectMeta.UID),
 		PVC:    claim,
 	}
-	volume, _ := newTestProvisioner().Provision(options)
+	volume, _, _ := newTestProvisioner().Provision(context.Background(), options)
 
 	// pv.Spec.ClaimRef MUST point to the claim that led to its creation (including the claim UID).
 	v1.AddToScheme(scheme.Scheme)
@@ -1595,7 +1594,7 @@ type testQualifiedProvisioner struct {
 var _ Provisioner = &testQualifiedProvisioner{}
 var _ Qualifier = &testQualifiedProvisioner{}
 
-func (p *testQualifiedProvisioner) ShouldProvision(claim *v1.PersistentVolumeClaim) bool {
+func (p *testQualifiedProvisioner) ShouldProvision(ctx context.Context, claim *v1.PersistentVolumeClaim) bool {
 	return p.answer
 }
 
@@ -1611,11 +1610,11 @@ type testBlockProvisioner struct {
 var _ Provisioner = &testBlockProvisioner{}
 var _ BlockProvisioner = &testBlockProvisioner{}
 
-func (p *testBlockProvisioner) SupportsBlock() bool {
+func (p *testBlockProvisioner) SupportsBlock(ctx context.Context) bool {
 	return p.answer
 }
 
-func (p *testProvisioner) Provision(options ProvisionOptions) (*v1.PersistentVolume, error) {
+func (p *testProvisioner) Provision(ctx context.Context, options ProvisionOptions) (*v1.PersistentVolume, ProvisioningState, error) {
 	p.provisionCalls <- provisionParams{
 		selectedNode:      options.SelectedNode,
 		allowedTopologies: options.StorageClass.AllowedTopologies,
@@ -1648,10 +1647,10 @@ func (p *testProvisioner) Provision(options ProvisionOptions) (*v1.PersistentVol
 		},
 	}
 
-	return pv, nil
+	return pv, ProvisioningFinished, nil
 }
 
-func (p *testProvisioner) Delete(volume *v1.PersistentVolume) error {
+func (p *testProvisioner) Delete(ctx context.Context, volume *v1.PersistentVolume) error {
 	return nil
 }
 
@@ -1662,17 +1661,13 @@ func newBadTestProvisioner() Provisioner {
 type badTestProvisioner struct {
 }
 
-var _ ProvisionerExt = &badTestProvisioner{}
+var _ Provisioner = &badTestProvisioner{}
 
-func (p *badTestProvisioner) Provision(options ProvisionOptions) (*v1.PersistentVolume, error) {
-	return nil, errors.New("fake error")
-}
-
-func (p *badTestProvisioner) ProvisionExt(options ProvisionOptions) (*v1.PersistentVolume, ProvisioningState, error) {
+func (p *badTestProvisioner) Provision(ctx context.Context, options ProvisionOptions) (*v1.PersistentVolume, ProvisioningState, error) {
 	return nil, ProvisioningFinished, errors.New("fake final error")
 }
 
-func (p *badTestProvisioner) Delete(volume *v1.PersistentVolume) error {
+func (p *badTestProvisioner) Delete(ctx context.Context, volume *v1.PersistentVolume) error {
 	return errors.New("fake error")
 }
 
@@ -1684,9 +1679,9 @@ type temporaryTestProvisioner struct {
 	badTestProvisioner
 }
 
-var _ ProvisionerExt = &temporaryTestProvisioner{}
+var _ Provisioner = &temporaryTestProvisioner{}
 
-func (p *temporaryTestProvisioner) ProvisionExt(options ProvisionOptions) (*v1.PersistentVolume, ProvisioningState, error) {
+func (p *temporaryTestProvisioner) Provision(ctx context.Context, options ProvisionOptions) (*v1.PersistentVolume, ProvisioningState, error) {
 	return nil, ProvisioningInBackground, errors.New("fake error, in progress")
 }
 
@@ -1698,9 +1693,9 @@ type rescheduleTestProvisioner struct {
 	badTestProvisioner
 }
 
-var _ ProvisionerExt = &rescheduleTestProvisioner{}
+var _ Provisioner = &rescheduleTestProvisioner{}
 
-func (p *rescheduleTestProvisioner) ProvisionExt(options ProvisionOptions) (*v1.PersistentVolume, ProvisioningState, error) {
+func (p *rescheduleTestProvisioner) Provision(ctx context.Context, options ProvisionOptions) (*v1.PersistentVolume, ProvisioningState, error) {
 	return nil, ProvisioningReschedule, errors.New("fake error, reschedule")
 }
 
@@ -1712,9 +1707,9 @@ type noChangeTestProvisioner struct {
 	badTestProvisioner
 }
 
-var _ ProvisionerExt = &noChangeTestProvisioner{}
+var _ Provisioner = &noChangeTestProvisioner{}
 
-func (p *noChangeTestProvisioner) ProvisionExt(options ProvisionOptions) (*v1.PersistentVolume, ProvisioningState, error) {
+func (p *noChangeTestProvisioner) Provision(ctx context.Context, options ProvisionOptions) (*v1.PersistentVolume, ProvisioningState, error) {
 	return nil, ProvisioningNoChange, errors.New("fake error, no change")
 }
 
@@ -1727,20 +1722,20 @@ type ignoredProvisioner struct {
 
 var _ Provisioner = &ignoredProvisioner{}
 
-func (i *ignoredProvisioner) Provision(options ProvisionOptions) (*v1.PersistentVolume, error) {
+func (i *ignoredProvisioner) Provision(ctx context.Context, options ProvisionOptions) (*v1.PersistentVolume, ProvisioningState, error) {
 	if options.PVC.Name == "claim-2" {
-		return nil, &IgnoredError{"Ignored"}
+		return nil, ProvisioningFinished, &IgnoredError{"Ignored"}
 	}
 
-	return newProvisionedVolume(newBetaStorageClass("class-1", "foo.bar/baz", nil), newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil)), nil
+	return newProvisionedVolume(newBetaStorageClass("class-1", "foo.bar/baz", nil), newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil)), ProvisioningFinished, nil
 }
 
-func (i *ignoredProvisioner) Delete(volume *v1.PersistentVolume) error {
+func (i *ignoredProvisioner) Delete(ctx context.Context, volume *v1.PersistentVolume) error {
 	return nil
 }
 
-func newExtProvisioner(t *testing.T, pvName string, returnStatus ProvisioningState, returnError error) *extProvisioner {
-	return &extProvisioner{
+func newProvisioner(t *testing.T, pvName string, returnStatus ProvisioningState, returnError error) Provisioner {
+	return &provisioner{
 		t:            t,
 		pvName:       pvName,
 		returnError:  returnError,
@@ -1748,31 +1743,26 @@ func newExtProvisioner(t *testing.T, pvName string, returnStatus ProvisioningSta
 	}
 }
 
-type extProvisioner struct {
+type provisioner struct {
 	t            *testing.T
 	pvName       string
 	returnError  error
 	returnStatus ProvisioningState
 }
 
-var _ Provisioner = &extProvisioner{}
-var _ ProvisionerExt = &extProvisioner{}
+var _ Provisioner = &provisioner{}
 
-func (m *extProvisioner) Provision(ProvisionOptions) (*v1.PersistentVolume, error) {
-	return nil, fmt.Errorf("Not implemented")
-}
-
-func (m *extProvisioner) Delete(pv *v1.PersistentVolume) error {
+func (m *provisioner) Delete(ctx context.Context, pv *v1.PersistentVolume) error {
 	return fmt.Errorf("Not implemented")
 
 }
 
-func (m *extProvisioner) ProvisionExt(options ProvisionOptions) (*v1.PersistentVolume, ProvisioningState, error) {
+func (m *provisioner) Provision(ctx context.Context, options ProvisionOptions) (*v1.PersistentVolume, ProvisioningState, error) {
 	if m.pvName != options.PVName {
-		m.t.Errorf("Invalid provision call, expected name %q, got %q", m.pvName, options.PVName)
+		m.t.Errorf("Invalid psrovision call, expected name %q, got %q", m.pvName, options.PVName)
 		return nil, ProvisioningFinished, fmt.Errorf("Invalid provision call, expected name %q, got %q", m.pvName, options.PVName)
 	}
-	klog.Infof("ProvisionExt() call")
+	klog.Infof("Provision() call")
 
 	if m.returnError == nil {
 		pv := &v1.PersistentVolume{

@@ -152,7 +152,7 @@ func (q *queueStore) processNextWorkItem() bool {
 
 func (q *queueStore) doSaveVolume(volume *v1.PersistentVolume) error {
 	klog.V(5).Infof("Saving volume %s", volume.Name)
-	_, err := q.client.CoreV1().PersistentVolumes().Create(context.TODO(), volume, metav1.CreateOptions{})
+	_, err := q.client.CoreV1().PersistentVolumes().Create(context.Background(), volume, metav1.CreateOptions{})
 	if err == nil || apierrs.IsAlreadyExists(err) {
 		klog.V(5).Infof("Volume %s saved", volume.Name)
 		q.sendSuccessEvent(volume)
@@ -211,7 +211,7 @@ func (b *backoffStore) StoreVolume(claim *v1.PersistentVolumeClaim, volume *v1.P
 	err := wait.ExponentialBackoff(*b.backoff, func() (bool, error) {
 		klog.Infof("Trying to save persistentvolume %q", volume.Name)
 		var err error
-		if _, err = b.client.CoreV1().PersistentVolumes().Create(context.TODO(), volume, metav1.CreateOptions{}); err == nil || apierrs.IsAlreadyExists(err) {
+		if _, err = b.client.CoreV1().PersistentVolumes().Create(context.Background(), volume, metav1.CreateOptions{}); err == nil || apierrs.IsAlreadyExists(err) {
 			// Save succeeded.
 			if err != nil {
 				klog.Infof("persistentvolume %q already exists, reusing", volume.Name)
@@ -243,7 +243,7 @@ func (b *backoffStore) StoreVolume(claim *v1.PersistentVolumeClaim, volume *v1.P
 
 	var lastDeleteError error
 	err = wait.ExponentialBackoff(*b.backoff, func() (bool, error) {
-		if err = b.ctrl.provisioner.Delete(volume); err == nil {
+		if err = b.ctrl.provisioner.Delete(context.Background(), volume); err == nil {
 			// Delete succeeded
 			klog.Infof("Cleaning volume %q succeeded", volume.Name)
 			return true, nil

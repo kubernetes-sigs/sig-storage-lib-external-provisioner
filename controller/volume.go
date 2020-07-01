@@ -17,6 +17,7 @@ limitations under the License.
 package controller
 
 import (
+	"context"
 	"fmt"
 
 	"k8s.io/api/core/v1"
@@ -29,14 +30,20 @@ import (
 // provider.
 type Provisioner interface {
 	// Provision creates a volume i.e. the storage asset and returns a PV object
-	// for the volume
-	Provision(ProvisionOptions) (*v1.PersistentVolume, error)
+	// for the volume. The provisioner can return an error (e.g. timeout) and state
+	// ProvisioningInBackground to tell the controller that provisioning may be in
+	// progress after Provision() finishes. The controller will call Provision()
+	// again with the same parameters, assuming that the provisioner continues
+	// provisioning the volume. The provisioner must return either final error (with
+	// ProvisioningFinished) or success eventually, otherwise the controller will try
+	// forever (unless FailedProvisionThreshold is set).
+	Provision(context.Context, ProvisionOptions) (*v1.PersistentVolume, ProvisioningState, error)
 	// Delete removes the storage asset that was created by Provision backing the
 	// given PV. Does not delete the PV object itself.
 	//
 	// May return IgnoredError to indicate that the call has been ignored and no
 	// action taken.
-	Delete(*v1.PersistentVolume) error
+	Delete(context.Context, *v1.PersistentVolume) error
 }
 
 // Qualifier is an optional interface implemented by provisioners to determine
@@ -45,14 +52,14 @@ type Provisioner interface {
 type Qualifier interface {
 	// ShouldProvision returns whether provisioning for the claim should
 	// be attempted.
-	ShouldProvision(*v1.PersistentVolumeClaim) bool
+	ShouldProvision(context.Context, *v1.PersistentVolumeClaim) bool
 }
 
 // DeletionGuard is an optional interface implemented by provisioners to determine
 // whether a PV should be deleted.
 type DeletionGuard interface {
 	// ShouldDelete returns whether deleting the PV should be attempted.
-	ShouldDelete(volume *v1.PersistentVolume) bool
+	ShouldDelete(context.Context, *v1.PersistentVolume) bool
 }
 
 // BlockProvisioner is an optional interface implemented by provisioners to determine
@@ -60,41 +67,27 @@ type DeletionGuard interface {
 type BlockProvisioner interface {
 	Provisioner
 	// SupportsBlock returns whether provisioner supports block volume.
-	SupportsBlock() bool
-}
-
-// ProvisionerExt is an optional interface implemented by provisioners that
-// can return enhanced error code from provisioner.
-type ProvisionerExt interface {
-	// ProvisionExt creates a volume i.e. the storage asset and returns a PV object
-	// for the volume. The provisioner can return an error (e.g. timeout) and state
-	// ProvisioningInBackground to tell the controller that provisioning may be in
-	// progress after ProvisionExt() finishes. The controller will call ProvisionExt()
-	// again with the same parameters, assuming that the provisioner continues
-	// provisioning the volume. The provisioner must return either final error (with
-	// ProvisioningFinished) or success eventually, otherwise the controller will try
-	// forever (unless FailedProvisionThreshold is set).
-	ProvisionExt(options ProvisionOptions) (*v1.PersistentVolume, ProvisioningState, error)
+	SupportsBlock(context.Context) bool
 }
 
 // ProvisioningState is state of volume provisioning. It tells the controller if
-// provisioning could be in progress in the background after ProvisionExt() call
+// provisioning could be in progress in the background after Provision() call
 // returns or the provisioning is 100% finished (either with success or error).
 type ProvisioningState string
 
 const (
 	// ProvisioningInBackground tells the controller that provisioning may be in
-	// progress in background after ProvisionExt call finished.
+	// progress in background after Provision call finished.
 	ProvisioningInBackground ProvisioningState = "Background"
 	// ProvisioningFinished tells the controller that provisioning for sure does
-	// not continue in background, error code of ProvisionExt() is final.
+	// not continue in background, error code of Provision() is final.
 	ProvisioningFinished ProvisioningState = "Finished"
 	// ProvisioningNoChange tells the controller that provisioning state is the same as
 	// before the call - either ProvisioningInBackground or ProvisioningFinished from
-	// the previous ProvisionExt(). This state is typically returned by a provisioner
+	// the previous Provision(). This state is typically returned by a provisioner
 	// before it could reach storage backend - the provisioner could not check status
 	// of provisioning and previous state applies. If this state is returned from the
-	// first ProvisionExt call, ProvisioningFinished is assumed (the provisioning
+	// first Provision call, ProvisioningFinished is assumed (the provisioning
 	// could not even start).
 	ProvisioningNoChange ProvisioningState = "NoChange"
 	// ProvisioningReschedule tells the controller that it shall stop all further
