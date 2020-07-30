@@ -1320,8 +1320,8 @@ func (ctrl *ProvisionController) provisionClaimOperation(ctx context.Context, cl
 	//  the locks. Check that PV (with deterministic name) hasn't been provisioned
 	//  yet.
 	pvName := ctrl.getProvisionedVolumeNameForClaim(claim)
-	volume, err := ctrl.client.CoreV1().PersistentVolumes().Get(ctx, pvName, metav1.GetOptions{})
-	if err == nil && volume != nil {
+	_, exists, err := ctrl.volumes.GetByKey(pvName)
+	if err == nil && exists {
 		// Volume has been already provisioned, nothing to do.
 		glog.Info(logOperation(operation, "persistentvolume %q already exists, skipping", pvName))
 		return ProvisioningFinished, errStopProvision
@@ -1439,6 +1439,9 @@ func (ctrl *ProvisionController) provisionClaimOperation(ctx context.Context, cl
 	if err := ctrl.volumeStore.StoreVolume(claim, volume); err != nil {
 		return ProvisioningFinished, err
 	}
+	if err = ctrl.volumes.Add(volume.Name); err != nil {
+		utilruntime.HandleError(err)
+	}
 	return ProvisioningFinished, nil
 }
 
@@ -1449,20 +1452,7 @@ func (ctrl *ProvisionController) deleteVolumeOperation(ctx context.Context, volu
 	operation := fmt.Sprintf("delete %q", volume.Name)
 	glog.Info(logOperation(operation, "started"))
 
-	// This method may have been waiting for a volume lock for some time.
-	// Our check does not have to be as sophisticated as PV controller's, we can
-	// trust that the PV controller has set the PV to Released/Failed and it's
-	// ours to delete
-	newVolume, err := ctrl.client.CoreV1().PersistentVolumes().Get(ctx, volume.Name, metav1.GetOptions{})
-	if err != nil {
-		return nil
-	}
-	if !ctrl.shouldDelete(ctx, newVolume) {
-		glog.Info(logOperation(operation, "persistentvolume no longer needs deletion, skipping"))
-		return nil
-	}
-
-	err = ctrl.provisioner.Delete(ctx, volume)
+	err := ctrl.provisioner.Delete(ctx, volume)
 	if err != nil {
 		if ierr, ok := err.(*IgnoredError); ok {
 			// Delete ignored, do nothing and hope another provisioner will delete it.
@@ -1486,18 +1476,22 @@ func (ctrl *ProvisionController) deleteVolumeOperation(ctx context.Context, volu
 	}
 
 	if ctrl.addFinalizer {
-		if len(newVolume.ObjectMeta.Finalizers) > 0 {
+		if len(volume.ObjectMeta.Finalizers) > 0 {
 			// Remove external-provisioner finalizer
 
 			// need to get the pv again because the delete has updated the object with a deletion timestamp
-			newVolume, err := ctrl.client.CoreV1().PersistentVolumes().Get(ctx, volume.Name, metav1.GetOptions{})
+			volumeObj, exists, err := ctrl.volumes.GetByKey(volume.Name)
 			if err != nil {
-				// If the volume is not found return, otherwise error
-				if !apierrs.IsNotFound(err) {
-					glog.Info(logOperation(operation, "failed to get persistentvolume to update finalizer: %v", err))
-					return err
-				}
+				glog.Info(logOperation(operation, "failed to get persistentvolume to update finalizer: %v", err))
+				return err
+			}
+			if !exists {
+				// If the volume is not found return
 				return nil
+			}
+			newVolume, ok := volumeObj.(*v1.PersistentVolume)
+			if !ok {
+				return fmt.Errorf("expected volume but got %+v", volumeObj)
 			}
 			finalizers := make([]string, 0)
 			for _, finalizer := range newVolume.ObjectMeta.Finalizers {
@@ -1523,6 +1517,9 @@ func (ctrl *ProvisionController) deleteVolumeOperation(ctx context.Context, volu
 
 	glog.Info(logOperation(operation, "persistentvolume deleted"))
 
+	if err = ctrl.volumes.Delete(volume.Name); err != nil {
+		utilruntime.HandleError(err)
+	}
 	glog.Info(logOperation(operation, "succeeded"))
 	return nil
 }
