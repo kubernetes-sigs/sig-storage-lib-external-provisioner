@@ -1367,6 +1367,7 @@ func newTestProvisionControllerSharedInformers(
 		}
 		return informerFactory.Storage().V1beta1().StorageClasses().Informer()
 	}()
+	nodeInformer := informerFactory.Core().V1().Nodes().Informer()
 
 	ctrl := NewProvisionController(
 		client,
@@ -1380,7 +1381,8 @@ func newTestProvisionControllerSharedInformers(
 		RetryPeriod(resyncPeriod/2),
 		ClaimsInformer(claimInformer),
 		VolumesInformer(volumeInformer),
-		ClassesInformer(classInformer))
+		ClassesInformer(classInformer),
+		NodeInformer(nodeInformer))
 
 	return ctrl, informerFactory
 }

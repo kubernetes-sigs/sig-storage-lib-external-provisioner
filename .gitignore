@@ -2,3 +2,5 @@ vendor
 Gopkg.toml
 Gopkg.lock
 **/*.pyc
+.idea
+.vscode

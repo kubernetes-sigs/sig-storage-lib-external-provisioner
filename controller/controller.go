@@ -131,9 +131,11 @@ type ProvisionController struct {
 	volumes        cache.Store
 	classInformer  cache.SharedInformer
 	classes        cache.Store
+	nodeInformer   cache.SharedIndexInformer
+	nodes 	       cache.Store
 
 	// To determine if the informer is internal or external
-	customClaimInformer, customVolumeInformer, customClassInformer bool
+	customClaimInformer, customVolumeInformer, customClassInformer, customNodeInformer bool
 
 	claimQueue  workqueue.RateLimitingInterface
 	volumeQueue workqueue.RateLimitingInterface
@@ -483,6 +485,19 @@ func VolumesInformer(informer cache.SharedInformer) func(*ProvisionController) e
 	}
 }
 
+// NodeInformer sets the informer to use for accessing nodes.
+// Defaults to using a internal informer.
+func NodeInformer(informer cache.SharedInformer) func(*ProvisionController) error {
+	return func(c *ProvisionController) error {
+		if c.HasRun() {
+			return errRuntime
+		}
+		c.nodeInformer = informer
+		c.customNodeInformer = true
+		return nil
+	}
+}
+
 // ClassesInformer sets the informer to use for accessing StorageClasses.
 // The informer must use the versioned resource appropriate for the Kubernetes cluster version
 // (that is, v1.StorageClass for >= 1.6, and v1beta1.StorageClass for < 1.6).
@@ -754,6 +769,13 @@ func NewProvisionController(
 		controller.volumeStore = NewBackoffStore(client, controller.eventRecorder, controller.createProvisionedPVBackoff, controller)
 	}
 
+	// --------------
+	// Nodes
+	if controller.nodeInformer == nil {
+		controller.nodeInformer = informer.Core().V1().Nodes().Informer()
+	}
+	controller.nodes = controller.nodeInformer.GetStore()
+
 	return controller
 }
 
@@ -856,8 +878,11 @@ func (ctrl *ProvisionController) Run(ctx context.Context) {
 		if !ctrl.customClassInformer {
 			go ctrl.classInformer.Run(ctx.Done())
 		}
+		if !ctrl.customNodeInformer {
+			go ctrl.nodeInformer.Run(ctx.Done())
+		}
 
-		if !cache.WaitForCacheSync(ctx.Done(), ctrl.claimInformer.HasSynced, ctrl.volumeInformer.HasSynced, ctrl.classInformer.HasSynced) {
+		if !cache.WaitForCacheSync(ctx.Done(), ctrl.claimInformer.HasSynced, ctrl.volumeInformer.HasSynced, ctrl.classInformer.HasSynced, ctrl.nodeInformer.HasSynced) {
 			return
 		}
 
@@ -1358,11 +1383,12 @@ func (ctrl *ProvisionController) provisionClaimOperation(ctx context.Context, cl
 	}
 
 	var selectedNode *v1.Node
+	var nodeExists bool
 	if ctrl.kubeVersion.AtLeast(utilversion.MustParseSemantic("v1.11.0")) {
 		// Get SelectedNode
 		if nodeName, ok := getString(claim.Annotations, annSelectedNode, annAlphaSelectedNode); ok {
-			selectedNode, err = ctrl.client.CoreV1().Nodes().Get(ctx, nodeName, metav1.GetOptions{}) // TODO (verult) cache Nodes
-			if err != nil {
+			selectedNode, nodeExists, err = ctrl.nodes.GetByKey(nodeName) // TODO (verult) cache Nodes
+			if err != nil || !nodeExists {
 				err = fmt.Errorf("failed to get target node: %v", err)
 				ctrl.eventRecorder.Event(claim, v1.EventTypeWarning, "ProvisioningFailed", err.Error())
 				return ProvisioningNoChange, err
