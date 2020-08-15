@@ -1467,14 +1467,6 @@ func (ctrl *ProvisionController) deleteVolumeOperation(ctx context.Context, volu
 
 	glog.Info(logOperation(operation, "volume deleted"))
 
-	// Delete the volume
-	if err = ctrl.client.CoreV1().PersistentVolumes().Delete(ctx, volume.Name, metav1.DeleteOptions{}); err != nil {
-		// Oops, could not delete the volume and therefore the controller will
-		// try to delete the volume again on next update.
-		glog.Info(logOperation(operation, "failed to delete persistentvolume: %v", err))
-		return err
-	}
-
 	if ctrl.addFinalizer {
 		if len(volume.ObjectMeta.Finalizers) > 0 {
 			// Remove external-provisioner finalizer
@@ -1513,6 +1505,14 @@ func (ctrl *ProvisionController) deleteVolumeOperation(ctx context.Context, volu
 				}
 			}
 		}
+	}
+
+	// Delete the volume
+	if err = ctrl.client.CoreV1().PersistentVolumes().Delete(ctx, volume.Name, metav1.DeleteOptions{}); err != nil {
+		// Oops, could not delete the volume and therefore the controller will
+		// try to delete the volume again on next update.
+		glog.Info(logOperation(operation, "failed to delete persistentvolume: %v", err))
+		return err
 	}
 
 	glog.Info(logOperation(operation, "persistentvolume deleted"))
