@@ -1439,7 +1439,7 @@ func (ctrl *ProvisionController) provisionClaimOperation(ctx context.Context, cl
 	if err := ctrl.volumeStore.StoreVolume(claim, volume); err != nil {
 		return ProvisioningFinished, err
 	}
-	if err = ctrl.volumes.Add(volume.Name); err != nil {
+	if err = ctrl.volumes.Add(volume); err != nil {
 		utilruntime.HandleError(err)
 	}
 	return ProvisioningFinished, nil
@@ -1517,7 +1517,7 @@ func (ctrl *ProvisionController) deleteVolumeOperation(ctx context.Context, volu
 
 	glog.Info(logOperation(operation, "persistentvolume deleted"))
 
-	if err = ctrl.volumes.Delete(volume.Name); err != nil {
+	if err = ctrl.volumes.Delete(volume); err != nil {
 		utilruntime.HandleError(err)
 	}
 	glog.Info(logOperation(operation, "succeeded"))
