@@ -27,7 +27,7 @@ import (
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
-	glog "k8s.io/klog"
+	"k8s.io/klog"
 	"sigs.k8s.io/sig-storage-lib-external-provisioner/v6/allocator"
 	"sigs.k8s.io/sig-storage-lib-external-provisioner/v6/controller"
 	"sigs.k8s.io/sig-storage-lib-external-provisioner/v6/util"
@@ -97,7 +97,7 @@ func (a *Allocator) Release(volume *v1.PersistentVolume) error {
 
 	gid, exists, err := getGid(volume)
 	if err != nil {
-		glog.Error(err)
+		klog.Error(err)
 	} else if exists {
 		gidTable, err := a.getGidTable(class.Name, gidMin, gidMax)
 		if err != nil {
@@ -178,7 +178,7 @@ func (a *Allocator) getGidTable(className string, min int, max int) (*allocator.
 func (a *Allocator) collectGids(className string, gidTable *allocator.MinMaxAllocator) error {
 	pvList, err := a.client.CoreV1().PersistentVolumes().List(context.Background(), metav1.ListOptions{})
 	if err != nil {
-		glog.Errorf("failed to get existing persistent volumes")
+		klog.Errorf("failed to get existing persistent volumes")
 		return err
 	}
 
@@ -192,21 +192,21 @@ func (a *Allocator) collectGids(className string, gidTable *allocator.MinMaxAllo
 		gidStr, ok := pv.Annotations[VolumeGidAnnotationKey]
 
 		if !ok {
-			glog.Warningf("no gid found in pv '%v'", pvName)
+			klog.Warningf("no gid found in pv '%v'", pvName)
 			continue
 		}
 
 		gid, err := convertGid(gidStr)
 		if err != nil {
-			glog.Error(err)
+			klog.Error(err)
 			continue
 		}
 
 		_, err = gidTable.Allocate(gid)
 		if err == allocator.ErrConflict {
-			glog.Warningf("gid %v found in pv %v was already allocated", gid, pvName)
+			klog.Warningf("gid %v found in pv %v was already allocated", gid, pvName)
 		} else if err != nil {
-			glog.Errorf("failed to store gid %v found in pv '%v': %v", gid, pvName, err)
+			klog.Errorf("failed to store gid %v found in pv '%v': %v", gid, pvName, err)
 			return err
 		}
 	}
