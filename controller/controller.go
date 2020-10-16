@@ -1047,7 +1047,7 @@ func (ctrl *ProvisionController) syncVolumeHandler(ctx context.Context, key stri
 		return err
 	}
 	if !exists {
-		utilruntime.HandleError(fmt.Errorf("volume %q in work queue no longer exists", key))
+		// Already deleted, nothing to do anymore.
 		return nil
 	}
 
