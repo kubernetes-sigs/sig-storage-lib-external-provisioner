@@ -27,7 +27,7 @@ import (
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
-	glog "k8s.io/klog"
+	glog "k8s.io/klog/v2"
 	"sigs.k8s.io/sig-storage-lib-external-provisioner/v6/allocator"
 	"sigs.k8s.io/sig-storage-lib-external-provisioner/v6/controller"
 	"sigs.k8s.io/sig-storage-lib-external-provisioner/v6/util"
