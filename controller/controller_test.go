@@ -45,7 +45,7 @@ import (
 	"k8s.io/client-go/tools/cache"
 	ref "k8s.io/client-go/tools/reference"
 	"k8s.io/client-go/util/workqueue"
-	"k8s.io/klog/v2"
+	klog "k8s.io/klog/v2"
 	"sigs.k8s.io/sig-storage-lib-external-provisioner/v6/controller/metrics"
 )
 
