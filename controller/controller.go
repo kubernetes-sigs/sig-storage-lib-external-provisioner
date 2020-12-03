@@ -45,6 +45,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/scheme"
 	corev1 "k8s.io/client-go/kubernetes/typed/core/v1"
+	corelistersv1 "k8s.io/client-go/listers/core/v1"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/tools/leaderelection"
 	"k8s.io/client-go/tools/leaderelection/resourcelock"
@@ -130,6 +131,7 @@ type ProvisionController struct {
 	volumeInformer cache.SharedInformer
 	volumes        cache.Store
 	classInformer  cache.SharedInformer
+	nodeLister     corelistersv1.NodeLister
 	classes        cache.Store
 
 	// To determine if the informer is internal or external
@@ -494,6 +496,22 @@ func ClassesInformer(informer cache.SharedInformer) func(*ProvisionController) e
 		}
 		c.classInformer = informer
 		c.customClassInformer = true
+		return nil
+	}
+}
+
+// NodesLister sets the informer to use for accessing Nodes.
+// This is needed only for PVCs which have a selected node.
+// Defaults to using a GET instead of an informer.
+//
+// Which approach is better depends on factors like cluster size and
+// ratio of PVCs with a selected node.
+func NodesLister(nodeLister corelistersv1.NodeLister) func(*ProvisionController) error {
+	return func(c *ProvisionController) error {
+		if c.HasRun() {
+			return errRuntime
+		}
+		c.nodeLister = nodeLister
 		return nil
 	}
 }
@@ -1361,7 +1379,11 @@ func (ctrl *ProvisionController) provisionClaimOperation(ctx context.Context, cl
 	if ctrl.kubeVersion.AtLeast(utilversion.MustParseSemantic("v1.11.0")) {
 		// Get SelectedNode
 		if nodeName, ok := getString(claim.Annotations, annSelectedNode, annAlphaSelectedNode); ok {
-			selectedNode, err = ctrl.client.CoreV1().Nodes().Get(ctx, nodeName, metav1.GetOptions{}) // TODO (verult) cache Nodes
+			if ctrl.nodeLister != nil {
+				selectedNode, err = ctrl.nodeLister.Get(nodeName)
+			} else {
+				selectedNode, err = ctrl.client.CoreV1().Nodes().Get(ctx, nodeName, metav1.GetOptions{}) // TODO (verult) cache Nodes
+			}
 			if err != nil {
 				err = fmt.Errorf("failed to get target node: %v", err)
 				ctrl.eventRecorder.Event(claim, v1.EventTypeWarning, "ProvisioningFailed", err.Error())
