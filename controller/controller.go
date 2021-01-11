@@ -710,13 +710,16 @@ func NewProvisionController(
 		controller.claimInformer = informer.Core().V1().PersistentVolumeClaims().Informer()
 		controller.claimInformer.AddEventHandler(claimHandler)
 	}
-	controller.claimInformer.AddIndexers(cache.Indexers{uidIndex: func(obj interface{}) ([]string, error) {
+	err = controller.claimInformer.AddIndexers(cache.Indexers{uidIndex: func(obj interface{}) ([]string, error) {
 		uid, err := getObjectUID(obj)
 		if err != nil {
 			return nil, err
 		}
 		return []string{uid}, nil
 	}})
+	if err != nil {
+		klog.Fatalf("Error setting indexer %s for pvc informer: %v", uidIndex, err)
+	}
 	controller.claimsIndexer = controller.claimInformer.GetIndexer()
 
 	// -----------------
