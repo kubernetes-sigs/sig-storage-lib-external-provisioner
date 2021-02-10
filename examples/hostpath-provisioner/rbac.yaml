@@ -28,7 +28,7 @@ metadata:
 subjects:
   - kind: ServiceAccount
     name: hostpath-provisioner
-    namespace: default
+    namespace: kube-system
 roleRef:
   kind: ClusterRole
   name: hostpath-provisioner
@@ -53,7 +53,7 @@ metadata:
 subjects:
   - kind: ServiceAccount
     name: hostpath-provisioner
-    namespace: default
+    namespace: kube-system
 roleRef:
   kind: Role
   name: leader-locking-hostpath-provisioner
