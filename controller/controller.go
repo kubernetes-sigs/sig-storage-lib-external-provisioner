@@ -798,9 +798,7 @@ func (ctrl *ProvisionController) enqueueClaim(obj interface{}) {
 		utilruntime.HandleError(err)
 		return
 	}
-	if ctrl.claimQueue.NumRequeues(uid) == 0 {
-		ctrl.claimQueue.Add(uid)
-	}
+	ctrl.claimQueue.Add(uid)
 }
 
 // enqueueVolume takes an obj and converts it into a namespace/name string which
@@ -812,11 +810,7 @@ func (ctrl *ProvisionController) enqueueVolume(obj interface{}) {
 		utilruntime.HandleError(err)
 		return
 	}
-	// Re-Adding is harmless but try to add it to the queue only if it is not
-	// already there, because if it is already there we *must* be retrying it
-	if ctrl.volumeQueue.NumRequeues(key) == 0 {
-		ctrl.volumeQueue.Add(key)
-	}
+	ctrl.volumeQueue.Add(key)
 }
 
 // forgetVolume Forgets an obj from the given work queue, telling the queue to
