@@ -1446,7 +1446,10 @@ func (ctrl *ProvisionController) provisionClaimOperation(ctx context.Context, cl
 		volume.ObjectMeta.Finalizers = append(volume.ObjectMeta.Finalizers, finalizerPV)
 	}
 
-	metav1.SetMetaDataAnnotation(&volume.ObjectMeta, annDynamicallyProvisioned, ctrl.provisionerName)
+	// Set class.Provisioner here so that for non-csi migration case it is the normal provisioner name
+	// but for CSI Migration case, it will be the in-tree provisioner name be set so that rollback
+	// works for in-tree plugin
+	metav1.SetMetaDataAnnotation(&volume.ObjectMeta, annDynamicallyProvisioned, class.Provisioner)
 	if ctrl.kubeVersion.AtLeast(utilversion.MustParseSemantic("v1.6.0")) {
 		volume.Spec.StorageClassName = claimClass
 	} else {
