@@ -39,7 +39,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apimachinery/pkg/util/uuid"
-	utilversion "k8s.io/apimachinery/pkg/util/version"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
@@ -117,14 +116,6 @@ type ProvisionController struct {
 	// volume-specific options and such that it needs in order to provision
 	// volumes.
 	provisioner Provisioner
-
-	// Kubernetes cluster server version:
-	// * 1.4: storage classes introduced as beta. Technically out-of-tree dynamic
-	// provisioning is not officially supported, though it works
-	// * 1.5: storage classes stay in beta. Out-of-tree dynamic provisioning is
-	// officially supported
-	// * 1.6: storage classes enter GA
-	kubeVersion *utilversion.Version
 
 	claimInformer  cache.SharedIndexInformer
 	claimsIndexer  cache.Indexer
@@ -621,7 +612,6 @@ func NewProvisionController(
 	client kubernetes.Interface,
 	provisionerName string,
 	provisioner Provisioner,
-	kubeVersion string,
 	options ...func(*ProvisionController) error,
 ) *ProvisionController {
 	id, err := os.Hostname()
@@ -642,7 +632,6 @@ func NewProvisionController(
 		client:                    client,
 		provisionerName:           provisionerName,
 		provisioner:               provisioner,
-		kubeVersion:               utilversion.MustParseSemantic(kubeVersion),
 		id:                        id,
 		component:                 component,
 		eventRecorder:             eventRecorder,
@@ -744,11 +733,7 @@ func NewProvisionController(
 
 	// no resource event handler needed for StorageClasses
 	if controller.classInformer == nil {
-		if controller.kubeVersion.AtLeast(utilversion.MustParseSemantic("v1.6.0")) {
-			controller.classInformer = informer.Storage().V1().StorageClasses().Informer()
-		} else {
-			controller.classInformer = informer.Storage().V1beta1().StorageClasses().Informer()
-		}
+		controller.classInformer = informer.Storage().V1().StorageClasses().Informer()
 	}
 	controller.classes = controller.classInformer.GetStore()
 
@@ -1159,42 +1144,26 @@ func (ctrl *ProvisionController) shouldProvision(ctx context.Context, claim *v1.
 		}
 	}
 
-	// Kubernetes 1.5 provisioning with annStorageProvisioner
-	if ctrl.kubeVersion.AtLeast(utilversion.MustParseSemantic("v1.5.0")) {
-		if provisioner, found := claim.Annotations[annStorageProvisioner]; found {
-			if ctrl.knownProvisioner(provisioner) {
-				claimClass := util.GetPersistentVolumeClaimClass(claim)
-				class, err := ctrl.getStorageClass(claimClass)
-				if err != nil {
-					return false, err
-				}
-				if class.VolumeBindingMode != nil && *class.VolumeBindingMode == storage.VolumeBindingWaitForFirstConsumer {
-					// When claim is in delay binding mode, annSelectedNode is
-					// required to provision volume.
-					// Though PV controller set annStorageProvisioner only when
-					// annSelectedNode is set, but provisioner may remove
-					// annSelectedNode to notify scheduler to reschedule again.
-					if selectedNode, ok := claim.Annotations[annSelectedNode]; ok && selectedNode != "" {
-						return true, nil
-					}
-					return false, nil
-				}
-				return true, nil
+	if provisioner, found := claim.Annotations[annStorageProvisioner]; found {
+		if ctrl.knownProvisioner(provisioner) {
+			claimClass := util.GetPersistentVolumeClaimClass(claim)
+			class, err := ctrl.getStorageClass(claimClass)
+			if err != nil {
+				return false, err
 			}
+			if class.VolumeBindingMode != nil && *class.VolumeBindingMode == storage.VolumeBindingWaitForFirstConsumer {
+				// When claim is in delay binding mode, annSelectedNode is
+				// required to provision volume.
+				// Though PV controller set annStorageProvisioner only when
+				// annSelectedNode is set, but provisioner may remove
+				// annSelectedNode to notify scheduler to reschedule again.
+				if selectedNode, ok := claim.Annotations[annSelectedNode]; ok && selectedNode != "" {
+					return true, nil
+				}
+				return false, nil
+			}
+			return true, nil
 		}
-	} else {
-		// Kubernetes 1.4 provisioning, evaluating class.Provisioner
-		claimClass := util.GetPersistentVolumeClaimClass(claim)
-		class, err := ctrl.getStorageClass(claimClass)
-		if err != nil {
-			klog.Errorf("Error getting claim %q's StorageClass's fields: %v", claimToClaimKey(claim), err)
-			return false, err
-		}
-		if class.Provisioner != ctrl.provisionerName {
-			return false, nil
-		}
-
-		return true, nil
 	}
 
 	return false, nil
@@ -1209,26 +1178,14 @@ func (ctrl *ProvisionController) shouldDelete(ctx context.Context, volume *v1.Pe
 		}
 	}
 
-	// In 1.9+ PV protection means the object will exist briefly with a
-	// deletion timestamp even after our successful Delete. Ignore it.
-	if ctrl.kubeVersion.AtLeast(utilversion.MustParseSemantic("v1.9.0")) {
-		if ctrl.addFinalizer && !ctrl.checkFinalizer(volume, finalizerPV) && volume.ObjectMeta.DeletionTimestamp != nil {
-			return false
-		} else if volume.ObjectMeta.DeletionTimestamp != nil {
-			return false
-		}
+	if ctrl.addFinalizer && !ctrl.checkFinalizer(volume, finalizerPV) && volume.ObjectMeta.DeletionTimestamp != nil {
+		return false
+	} else if volume.ObjectMeta.DeletionTimestamp != nil {
+		return false
 	}
 
-	// In 1.5+ we delete only if the volume is in state Released. In 1.4 we must
-	// delete if the volume is in state Failed too.
-	if ctrl.kubeVersion.AtLeast(utilversion.MustParseSemantic("v1.5.0")) {
-		if volume.Status.Phase != v1.VolumeReleased {
-			return false
-		}
-	} else {
-		if volume.Status.Phase != v1.VolumeReleased && volume.Status.Phase != v1.VolumeFailed {
-			return false
-		}
+	if volume.Status.Phase != v1.VolumeReleased {
+		return false
 	}
 
 	if volume.Spec.PersistentVolumeReclaimPolicy != v1.PersistentVolumeReclaimDelete {
@@ -1373,19 +1330,17 @@ func (ctrl *ProvisionController) provisionClaimOperation(ctx context.Context, cl
 	}
 
 	var selectedNode *v1.Node
-	if ctrl.kubeVersion.AtLeast(utilversion.MustParseSemantic("v1.11.0")) {
-		// Get SelectedNode
-		if nodeName, ok := getString(claim.Annotations, annSelectedNode, annAlphaSelectedNode); ok {
-			if ctrl.nodeLister != nil {
-				selectedNode, err = ctrl.nodeLister.Get(nodeName)
-			} else {
-				selectedNode, err = ctrl.client.CoreV1().Nodes().Get(ctx, nodeName, metav1.GetOptions{}) // TODO (verult) cache Nodes
-			}
-			if err != nil {
-				err = fmt.Errorf("failed to get target node: %v", err)
-				ctrl.eventRecorder.Event(claim, v1.EventTypeWarning, "ProvisioningFailed", err.Error())
-				return ProvisioningNoChange, err
-			}
+	// Get SelectedNode
+	if nodeName, ok := getString(claim.Annotations, annSelectedNode, annAlphaSelectedNode); ok {
+		if ctrl.nodeLister != nil {
+			selectedNode, err = ctrl.nodeLister.Get(nodeName)
+		} else {
+			selectedNode, err = ctrl.client.CoreV1().Nodes().Get(ctx, nodeName, metav1.GetOptions{}) // TODO (verult) cache Nodes
+		}
+		if err != nil {
+			err = fmt.Errorf("failed to get target node: %v", err)
+			ctrl.eventRecorder.Event(claim, v1.EventTypeWarning, "ProvisioningFailed", err.Error())
+			return ProvisioningNoChange, err
 		}
 	}
 
@@ -1447,11 +1402,7 @@ func (ctrl *ProvisionController) provisionClaimOperation(ctx context.Context, cl
 	}
 
 	metav1.SetMetaDataAnnotation(&volume.ObjectMeta, annDynamicallyProvisioned, ctrl.provisionerName)
-	if ctrl.kubeVersion.AtLeast(utilversion.MustParseSemantic("v1.6.0")) {
-		volume.Spec.StorageClassName = claimClass
-	} else {
-		metav1.SetMetaDataAnnotation(&volume.ObjectMeta, annClass, claimClass)
-	}
+	volume.Spec.StorageClassName = claimClass
 
 	klog.Info(logOperation(operation, "succeeded"))
 
