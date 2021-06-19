@@ -523,7 +523,8 @@ func TestController(t *testing.T) {
 			name: "remove selectedNode and claim on reschedule",
 			objs: []runtime.Object{
 				newStorageClassWithVolumeBindingMode("class-1", "foo.bar/baz", &modeWait),
-				newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", map[string]string{annStorageProvisioner: "foo.bar/baz", annSelectedNode: "node-wrong"}),
+				newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", map[string]string{annStorageProvisioner: "foo.bar/baz", annSelectedNode: "node-1"}),
+				newNode("node-1"),
 			},
 			provisionerName: "foo.bar/baz",
 			provisioner:     newRescheduleTestProvisioner(),
@@ -576,12 +577,13 @@ func TestController(t *testing.T) {
 			name: "do not remove selectedNode while in progress",
 			objs: []runtime.Object{
 				newStorageClassWithVolumeBindingMode("class-1", "foo.bar/baz", &modeWait),
-				newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", map[string]string{annStorageProvisioner: "foo.bar/baz", annSelectedNode: "node-wrong"}),
+				newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", map[string]string{annStorageProvisioner: "foo.bar/baz", annSelectedNode: "node-1"}),
+				newNode("node-1"),
 			},
 			provisionerName: "foo.bar/baz",
 			provisioner:     newTemporaryTestProvisioner(),
 			expectedClaims: []v1.PersistentVolumeClaim{
-				*newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", map[string]string{annStorageProvisioner: "foo.bar/baz", annSelectedNode: "node-wrong"}),
+				*newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", map[string]string{annStorageProvisioner: "foo.bar/baz", annSelectedNode: "node-1"}),
 			},
 			expectedClaimsInProgress: []string{"uid-1-1"},
 			expectedMetrics: testMetrics{
