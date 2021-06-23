@@ -28,7 +28,6 @@ import (
 	dto "github.com/prometheus/client_model/go"
 	v1 "k8s.io/api/core/v1"
 	storage "k8s.io/api/storage/v1"
-	storagebeta "k8s.io/api/storage/v1beta1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -36,7 +35,6 @@ import (
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apimachinery/pkg/util/uuid"
-	utilversion "k8s.io/apimachinery/pkg/util/version"
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/fake"
@@ -60,8 +58,7 @@ func init() {
 }
 
 var (
-	modeWaitBeta      = storagebeta.VolumeBindingWaitForFirstConsumer
-	modeImmediateBeta = storagebeta.VolumeBindingImmediate
+	modeWait = storage.VolumeBindingWaitForFirstConsumer
 )
 
 // TODO clean this up, e.g. remove redundant params (provisionerName: "foo.bar/baz")
@@ -81,7 +78,6 @@ func TestController(t *testing.T) {
 		expectedVolumes            []v1.PersistentVolume
 		expectedClaims             []v1.PersistentVolumeClaim
 		expectedClaimsInProgress   []string
-		serverVersion              string
 		volumeQueueStore           bool
 		expectedStoredVolumes      []*v1.PersistentVolume
 		expectedMetrics            testMetrics
@@ -89,15 +85,15 @@ func TestController(t *testing.T) {
 		{
 			name: "provision for claim-1 but not claim-2",
 			objs: []runtime.Object{
-				newBetaStorageClass("class-1", "foo.bar/baz", nil),
-				newBetaStorageClass("class-2", "abc.def/ghi", nil),
+				newStorageClass("class-1", "foo.bar/baz"),
+				newStorageClass("class-2", "abc.def/ghi"),
 				newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil),
 				newClaim("claim-2", "uid-1-2", "class-2", "abc.def/ghi", "", nil),
 			},
 			provisionerName: "foo.bar/baz",
 			provisioner:     newTestProvisioner(),
 			expectedVolumes: []v1.PersistentVolume{
-				*newProvisionedVolume(newBetaStorageClass("class-1", "foo.bar/baz", nil), newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil)),
+				*newProvisionedVolume(newStorageClass("class-1", "foo.bar/baz"), newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil)),
 			},
 			expectedMetrics: testMetrics{
 				provisioned: counts{
@@ -108,14 +104,14 @@ func TestController(t *testing.T) {
 		{
 			name: "don't provision, volume already exists",
 			objs: []runtime.Object{
-				newBetaStorageClass("class-1", "foo.bar/baz", nil),
+				newStorageClass("class-1", "foo.bar/baz"),
 				newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil),
-				newProvisionedVolume(newBetaStorageClass("class-1", "foo.bar/baz", nil), newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil)),
+				newProvisionedVolume(newStorageClass("class-1", "foo.bar/baz"), newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil)),
 			},
 			provisionerName: "foo.bar/baz",
 			provisioner:     newTestProvisioner(),
 			expectedVolumes: []v1.PersistentVolume{
-				*newProvisionedVolume(newBetaStorageClass("class-1", "foo.bar/baz", nil), newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil)),
+				*newProvisionedVolume(newStorageClass("class-1", "foo.bar/baz"), newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil)),
 			},
 			expectedMetrics: testMetrics{
 				provisioned: counts{
@@ -126,7 +122,7 @@ func TestController(t *testing.T) {
 		{
 			name: "don't provision, provisioner does not support raw block",
 			objs: []runtime.Object{
-				newBetaStorageClass("class-1", "foo.bar/baz", nil),
+				newStorageClass("class-1", "foo.bar/baz"),
 				newClaimWithVolumeMode("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil, v1.PersistentVolumeBlock),
 			},
 			provisionerName: "foo.bar/baz",
@@ -140,14 +136,14 @@ func TestController(t *testing.T) {
 		{
 			name: "provision for claim-1 with storage class provisioner name distinct from controller provisioner name",
 			objs: []runtime.Object{
-				newBetaStorageClass("class-1", "foo.bar/baz", nil),
+				newStorageClass("class-1", "foo.bar/baz"),
 				newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil),
 			},
 			provisionerName:            "csi.com/mock-csi",
 			additionalProvisionerNames: []string{"foo.bar/baz", "foo.xyz/baz"},
 			provisioner:                newTestProvisioner(),
 			expectedVolumes: []v1.PersistentVolume{
-				*newProvisionedVolume(newBetaStorageClass("class-1", "foo.bar/baz", nil), newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil)),
+				*newProvisionedVolume(newStorageClass("class-1", "foo.bar/baz"), newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil)),
 			},
 			expectedMetrics: testMetrics{
 				provisioned: counts{
@@ -220,7 +216,7 @@ func TestController(t *testing.T) {
 		{
 			name: "provisioner fails to provision for claim-1: no pv is created",
 			objs: []runtime.Object{
-				newBetaStorageClass("class-1", "foo.bar/baz", nil),
+				newStorageClass("class-1", "foo.bar/baz"),
 				newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil),
 			},
 			provisionerName: "foo.bar/baz",
@@ -251,7 +247,7 @@ func TestController(t *testing.T) {
 		{
 			name: "try to provision for claim-1 but fail to save the pv object",
 			objs: []runtime.Object{
-				newBetaStorageClass("class-1", "foo.bar/baz", nil),
+				newStorageClass("class-1", "foo.bar/baz"),
 				newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil),
 			},
 			provisionerName: "foo.bar/baz",
@@ -290,7 +286,7 @@ func TestController(t *testing.T) {
 		{
 			name: "don't provision, because it is ignored",
 			objs: []runtime.Object{
-				newBetaStorageClass("class-1", "foo.bar/baz", nil),
+				newStorageClass("class-1", "foo.bar/baz"),
 				newClaim("claim-2", "uid-1-1", "class-1", "foo.bar/baz", "", nil),
 			},
 			provisionerName: "foo.bar/baz",
@@ -304,14 +300,14 @@ func TestController(t *testing.T) {
 		{
 			name: "provision for claim-1 but not claim-2, because it is ignored",
 			objs: []runtime.Object{
-				newBetaStorageClass("class-1", "foo.bar/baz", nil),
+				newStorageClass("class-1", "foo.bar/baz"),
 				newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil),
 				newClaim("claim-2", "uid-1-2", "class-1", "foo.bar/baz", "", nil),
 			},
 			provisionerName: "foo.bar/baz",
 			provisioner:     newIgnoredProvisioner(),
 			expectedVolumes: []v1.PersistentVolume{
-				*newProvisionedVolume(newBetaStorageClass("class-1", "foo.bar/baz", nil), newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil)),
+				*newProvisionedVolume(newStorageClass("class-1", "foo.bar/baz"), newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil)),
 			},
 			expectedMetrics: testMetrics{
 				provisioned: counts{
@@ -322,14 +318,13 @@ func TestController(t *testing.T) {
 		{
 			name: "provision with Retain reclaim policy",
 			objs: []runtime.Object{
-				newStorageClassWithSpecifiedReclaimPolicy("class-1", "foo.bar/baz", v1.PersistentVolumeReclaimRetain),
+				newStorageClassWithReclaimPolicy("class-1", "foo.bar/baz", v1.PersistentVolumeReclaimRetain),
 				newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil),
 			},
 			provisionerName: "foo.bar/baz",
 			provisioner:     newTestProvisioner(),
-			serverVersion:   "v1.8.0",
 			expectedVolumes: []v1.PersistentVolume{
-				*newProvisionedVolumeWithSpecifiedReclaimPolicy(newStorageClassWithSpecifiedReclaimPolicy("class-1", "foo.bar/baz", v1.PersistentVolumeReclaimRetain), newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil)),
+				*newProvisionedVolumeWithReclaimPolicy(newStorageClassWithReclaimPolicy("class-1", "foo.bar/baz", v1.PersistentVolumeReclaimRetain), newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil)),
 			},
 			expectedMetrics: testMetrics{
 				provisioned: counts{
@@ -340,13 +335,13 @@ func TestController(t *testing.T) {
 		{
 			name: "provision for ext provisioner",
 			objs: []runtime.Object{
-				newBetaStorageClass("class-1", "foo.bar/baz", nil),
+				newStorageClass("class-1", "foo.bar/baz"),
 				newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil),
 			},
 			provisionerName: "foo.bar/baz",
 			provisioner:     newProvisioner(t, "pvc-uid-1-1", ProvisioningFinished, nil),
 			expectedVolumes: []v1.PersistentVolume{
-				*newProvisionedVolume(newBetaStorageClass("class-1", "foo.bar/baz", nil), newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil)),
+				*newProvisionedVolume(newStorageClass("class-1", "foo.bar/baz"), newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil)),
 			},
 			expectedMetrics: testMetrics{
 				provisioned: counts{
@@ -357,7 +352,7 @@ func TestController(t *testing.T) {
 		{
 			name: "ext provisioner: final error does not mark claim as in progress",
 			objs: []runtime.Object{
-				newBetaStorageClass("class-1", "foo.bar/baz", nil),
+				newStorageClass("class-1", "foo.bar/baz"),
 				newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil),
 			},
 			provisionerName:          "foo.bar/baz",
@@ -372,7 +367,7 @@ func TestController(t *testing.T) {
 		{
 			name: "ext provisioner: provisional error marks claim as in progress",
 			objs: []runtime.Object{
-				newBetaStorageClass("class-1", "foo.bar/baz", nil),
+				newStorageClass("class-1", "foo.bar/baz"),
 				newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil),
 			},
 			provisionerName:          "foo.bar/baz",
@@ -387,7 +382,7 @@ func TestController(t *testing.T) {
 		{
 			name: "ext provisioner: NoChange error does not mark claim as in progress",
 			objs: []runtime.Object{
-				newBetaStorageClass("class-1", "foo.bar/baz", nil),
+				newStorageClass("class-1", "foo.bar/baz"),
 				newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil),
 			},
 			provisionerName:          "foo.bar/baz",
@@ -402,7 +397,7 @@ func TestController(t *testing.T) {
 		{
 			name: "ext provisioner: final error removes claim from in progress",
 			objs: []runtime.Object{
-				newBetaStorageClass("class-1", "foo.bar/baz", nil),
+				newStorageClass("class-1", "foo.bar/baz"),
 				newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil),
 			},
 			claimsInProgress: []*v1.PersistentVolumeClaim{
@@ -420,7 +415,7 @@ func TestController(t *testing.T) {
 		{
 			name: "ext provisioner: provisional error does not remove claim from in progress",
 			objs: []runtime.Object{
-				newBetaStorageClass("class-1", "foo.bar/baz", nil),
+				newStorageClass("class-1", "foo.bar/baz"),
 				newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil),
 			},
 			claimsInProgress: []*v1.PersistentVolumeClaim{
@@ -438,7 +433,7 @@ func TestController(t *testing.T) {
 		{
 			name: "ext provisioner: NoChange error does not remove claim from in progress",
 			objs: []runtime.Object{
-				newBetaStorageClass("class-1", "foo.bar/baz", nil),
+				newStorageClass("class-1", "foo.bar/baz"),
 				newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil),
 			},
 			claimsInProgress: []*v1.PersistentVolumeClaim{
@@ -456,7 +451,7 @@ func TestController(t *testing.T) {
 		{
 			name: "ext provisioner: claimsInProgress is used for deleted PVCs",
 			objs: []runtime.Object{
-				newBetaStorageClass("class-1", "foo.bar/baz", nil),
+				newStorageClass("class-1", "foo.bar/baz"),
 			},
 			claimsInProgress: []*v1.PersistentVolumeClaim{
 				newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil),
@@ -466,7 +461,7 @@ func TestController(t *testing.T) {
 			provisioner:              newProvisioner(t, "pvc-uid-1-1", ProvisioningFinished, nil),
 			expectedClaimsInProgress: []string{},
 			expectedVolumes: []v1.PersistentVolume{
-				*newProvisionedVolume(newBetaStorageClass("class-1", "foo.bar/baz", nil), newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil)),
+				*newProvisionedVolume(newStorageClass("class-1", "foo.bar/baz"), newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil)),
 			},
 			expectedMetrics: testMetrics{
 				provisioned: counts{
@@ -477,7 +472,7 @@ func TestController(t *testing.T) {
 		{
 			name: "PV save backoff: provision a PV and fail to save it -> it's in the queue",
 			objs: []runtime.Object{
-				newBetaStorageClass("class-1", "foo.bar/baz", nil),
+				newStorageClass("class-1", "foo.bar/baz"),
 				newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil),
 			},
 			provisionerName: "foo.bar/baz",
@@ -489,7 +484,7 @@ func TestController(t *testing.T) {
 			expectedVolumes:  []v1.PersistentVolume(nil),
 			volumeQueueStore: true,
 			expectedStoredVolumes: []*v1.PersistentVolume{
-				newProvisionedVolume(newBetaStorageClass("class-1", "foo.bar/baz", nil), newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil)),
+				newProvisionedVolume(newStorageClass("class-1", "foo.bar/baz"), newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil)),
 			},
 			expectedMetrics: testMetrics{
 				provisioned: counts{
@@ -500,7 +495,7 @@ func TestController(t *testing.T) {
 		{
 			name: "PV save backoff: provision a PV and fail to save it two times -> it's removed from the queue",
 			objs: []runtime.Object{
-				newBetaStorageClass("class-1", "foo.bar/baz", nil),
+				newStorageClass("class-1", "foo.bar/baz"),
 				newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil),
 			},
 			provisionerName: "foo.bar/baz",
@@ -514,7 +509,7 @@ func TestController(t *testing.T) {
 				return false, nil, nil
 			},
 			expectedVolumes: []v1.PersistentVolume{
-				*newProvisionedVolume(newBetaStorageClass("class-1", "foo.bar/baz", nil), newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil)),
+				*newProvisionedVolume(newStorageClass("class-1", "foo.bar/baz"), newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil)),
 			},
 			volumeQueueStore:      true,
 			expectedStoredVolumes: []*v1.PersistentVolume{},
@@ -527,8 +522,9 @@ func TestController(t *testing.T) {
 		{
 			name: "remove selectedNode and claim on reschedule",
 			objs: []runtime.Object{
-				newBetaStorageClass("class-1", "foo.bar/baz", &modeWaitBeta),
-				newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", map[string]string{annStorageProvisioner: "foo.bar/baz", annSelectedNode: "node-wrong"}),
+				newStorageClassWithVolumeBindingMode("class-1", "foo.bar/baz", &modeWait),
+				newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", map[string]string{annStorageProvisioner: "foo.bar/baz", annSelectedNode: "node-1"}),
+				newNode("node-1"),
 			},
 			provisionerName: "foo.bar/baz",
 			provisioner:     newRescheduleTestProvisioner(),
@@ -545,7 +541,7 @@ func TestController(t *testing.T) {
 		{
 			name: "do not remove selectedNode after final error, only the claim",
 			objs: []runtime.Object{
-				newBetaStorageClass("class-1", "foo.bar/baz", &modeWaitBeta),
+				newStorageClassWithVolumeBindingMode("class-1", "foo.bar/baz", &modeWait),
 				newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", map[string]string{annStorageProvisioner: "foo.bar/baz", annSelectedNode: "node-wrong"}),
 			},
 			provisionerName: "foo.bar/baz",
@@ -563,7 +559,7 @@ func TestController(t *testing.T) {
 		{
 			name: "do not remove selectedNode if nothing changes",
 			objs: []runtime.Object{
-				newBetaStorageClass("class-1", "foo.bar/baz", &modeWaitBeta),
+				newStorageClassWithVolumeBindingMode("class-1", "foo.bar/baz", &modeWait),
 				newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", map[string]string{annStorageProvisioner: "foo.bar/baz", annSelectedNode: "node-wrong"}),
 			},
 			provisionerName: "foo.bar/baz",
@@ -580,13 +576,14 @@ func TestController(t *testing.T) {
 		{
 			name: "do not remove selectedNode while in progress",
 			objs: []runtime.Object{
-				newBetaStorageClass("class-1", "foo.bar/baz", &modeWaitBeta),
-				newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", map[string]string{annStorageProvisioner: "foo.bar/baz", annSelectedNode: "node-wrong"}),
+				newStorageClassWithVolumeBindingMode("class-1", "foo.bar/baz", &modeWait),
+				newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", map[string]string{annStorageProvisioner: "foo.bar/baz", annSelectedNode: "node-1"}),
+				newNode("node-1"),
 			},
 			provisionerName: "foo.bar/baz",
 			provisioner:     newTemporaryTestProvisioner(),
 			expectedClaims: []v1.PersistentVolumeClaim{
-				*newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", map[string]string{annStorageProvisioner: "foo.bar/baz", annSelectedNode: "node-wrong"}),
+				*newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", map[string]string{annStorageProvisioner: "foo.bar/baz", annSelectedNode: "node-1"}),
 			},
 			expectedClaimsInProgress: []string{"uid-1-1"},
 			expectedMetrics: testMetrics{
@@ -607,16 +604,11 @@ func TestController(t *testing.T) {
 				}
 			}
 
-			serverVersion := defaultServerVersion
-			if test.serverVersion != "" {
-				serverVersion = test.serverVersion
-			}
-
 			var ctrl testProvisionController
 			if test.additionalProvisionerNames == nil {
-				ctrl = newTestProvisionController(client, test.provisionerName, test.provisioner, serverVersion)
+				ctrl = newTestProvisionController(client, test.provisionerName, test.provisioner)
 			} else {
-				ctrl = newTestProvisionControllerWithAdditionalNames(client, test.provisionerName, test.provisioner, serverVersion, test.additionalProvisionerNames)
+				ctrl = newTestProvisionControllerWithAdditionalNames(client, test.provisionerName, test.provisioner, test.additionalProvisionerNames)
 			}
 			for _, claim := range test.claimsInProgress {
 				ctrl.claimsInProgress.Store(string(claim.UID), claim)
@@ -765,8 +757,7 @@ func TestTopologyParams(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			client := fake.NewSimpleClientset(test.objs...)
 			provisioner := newTestProvisioner()
-			serverVersion := "v1.11.0"
-			ctrl := newTestProvisionController(client, "foo.bar/baz" /* provisionerName */, provisioner, serverVersion)
+			ctrl := newTestProvisionController(client, "foo.bar/baz" /* provisionerName */, provisioner)
 			// Run forever...
 			go ctrl.Run(context.Background())
 
@@ -800,9 +791,8 @@ func TestShouldProvision(t *testing.T) {
 		provisionerName            string
 		additionalProvisionerNames []string
 		provisioner                Provisioner
-		class                      *storagebeta.StorageClass
+		class                      *storage.StorageClass
 		claim                      *v1.PersistentVolumeClaim
-		serverGitVersion           string
 		expectedShould             bool
 		expectedError              bool
 	}{
@@ -810,7 +800,7 @@ func TestShouldProvision(t *testing.T) {
 			name:            "should provision based on provisionerName",
 			provisionerName: "foo.bar/baz",
 			provisioner:     newTestProvisioner(),
-			class:           newBetaStorageClass("class-1", "foo.bar/baz", nil),
+			class:           newStorageClass("class-1", "foo.bar/baz"),
 			claim:           newClaim("claim-1", "1-1", "class-1", "foo.bar/baz", "", nil),
 			expectedShould:  true,
 		},
@@ -819,7 +809,7 @@ func TestShouldProvision(t *testing.T) {
 			provisionerName:            "csi.com/mock-csi",
 			additionalProvisionerNames: []string{"foo.bar/baz", "foo.xyz/baz"},
 			provisioner:                newTestProvisioner(),
-			class:                      newBetaStorageClass("class-1", "foo.bar/baz", nil),
+			class:                      newStorageClass("class-1", "foo.bar/baz"),
 			claim:                      newClaim("claim-1", "1-1", "class-1", "foo.bar/baz", "", nil),
 			expectedShould:             true,
 		},
@@ -827,7 +817,7 @@ func TestShouldProvision(t *testing.T) {
 			name:            "claim already bound",
 			provisionerName: "foo.bar/baz",
 			provisioner:     newTestProvisioner(),
-			class:           newBetaStorageClass("class-1", "foo.bar/baz", nil),
+			class:           newStorageClass("class-1", "foo.bar/baz"),
 			claim:           newClaim("claim-1", "1-1", "class-1", "foo.bar/baz", "foo", nil),
 			expectedShould:  false,
 		},
@@ -835,7 +825,7 @@ func TestShouldProvision(t *testing.T) {
 			name:            "no such class",
 			provisionerName: "foo.bar/baz",
 			provisioner:     newTestProvisioner(),
-			class:           newBetaStorageClass("class-1", "foo.bar/baz", nil),
+			class:           newStorageClass("class-1", "foo.bar/baz"),
 			claim:           newClaim("claim-1", "1-1", "class-2", "", "", nil),
 			expectedShould:  false,
 		},
@@ -843,7 +833,7 @@ func TestShouldProvision(t *testing.T) {
 			name:            "not this provisioner's job",
 			provisionerName: "foo.bar/baz",
 			provisioner:     newTestProvisioner(),
-			class:           newBetaStorageClass("class-1", "abc.def/ghi", nil),
+			class:           newStorageClass("class-1", "abc.def/ghi"),
 			claim:           newClaim("claim-1", "1-1", "class-1", "abc.def/ghi", "", nil),
 			expectedShould:  false,
 		},
@@ -853,67 +843,24 @@ func TestShouldProvision(t *testing.T) {
 			name:            "unknown provisioner annotation 1.5",
 			provisionerName: "foo.bar/baz",
 			provisioner:     newTestProvisioner(),
-			class:           newBetaStorageClass("class-1", "foo.bar/baz", nil),
+			class:           newStorageClass("class-1", "foo.bar/baz"),
 			claim: newClaim("claim-1", "1-1", "class-1", "", "",
 				map[string]string{annStorageProvisioner: "abc.def/ghi"}),
 			expectedShould: false,
-		},
-		// Kubernetes 1.4 provisioning - annStorageProvisioner is set but ignored
-		{
-			name:            "should provision, unknown provisioner annotation but 1.4",
-			provisionerName: "foo.bar/baz",
-			provisioner:     newTestProvisioner(),
-			class:           newBetaStorageClass("class-1", "foo.bar/baz", nil),
-			claim: newClaim("claim-1", "1-1", "class-1", "", "",
-				map[string]string{annStorageProvisioner: "abc.def/ghi"}),
-			serverGitVersion: "v1.4.0",
-			expectedShould:   true,
 		},
 		// Kubernetes 1.5 provisioning - annStorageProvisioner is not set
 		{
 			name:            "no provisioner annotation 1.5",
 			provisionerName: "foo.bar/baz",
-			class:           newBetaStorageClass("class-1", "foo.bar/baz", nil),
+			class:           newStorageClass("class-1", "foo.bar/baz"),
 			claim:           newClaim("claim-1", "1-1", "class-1", "", "", nil),
 			expectedShould:  false,
-		},
-		// Kubernetes 1.4 provisioning - annStorageProvisioner is not set nor needed
-		{
-			name:             "should provision, no provisioner annotation needed",
-			provisionerName:  "foo.bar/baz",
-			provisioner:      newTestProvisioner(),
-			class:            newBetaStorageClass("class-1", "foo.bar/baz", nil),
-			claim:            newClaim("claim-1", "1-1", "class-1", "", "", nil),
-			serverGitVersion: "v1.4.0",
-			expectedShould:   true,
-		},
-		// Kubernetes 1.4 provisioning - need StorageClass.provisioner but it DNE
-		{
-			name:             "should error, need to read storage class and it DNE (none exist)",
-			provisionerName:  "foo.bar/baz",
-			provisioner:      newTestProvisioner(),
-			class:            nil,
-			claim:            newClaim("claim-1", "1-1", "class-1", "", "", nil),
-			serverGitVersion: "v1.4.0",
-			expectedShould:   false,
-			expectedError:    true,
-		},
-		// Kubernetes 1.4 provisioning - need StorageClass.provisioner but it DNE
-		{
-			name:             "should error, need to read storage class and it DNE (one exists with different name)",
-			provisionerName:  "foo.bar/baz",
-			provisioner:      newTestProvisioner(),
-			class:            newBetaStorageClass("class-2", "foo.bar/baz", nil),
-			claim:            newClaim("claim-1", "1-1", "class-1", "", "", nil),
-			serverGitVersion: "v1.4.0",
-			expectedShould:   false,
-			expectedError:    true,
 		},
 		{
 			name:            "qualifier says no",
 			provisionerName: "foo.bar/baz",
 			provisioner:     newTestQualifiedProvisioner(false),
-			class:           newBetaStorageClass("class-1", "foo.bar/baz", nil),
+			class:           newStorageClass("class-1", "foo.bar/baz"),
 			claim:           newClaim("claim-1", "1-1", "class-1", "foo.bar/baz", "", nil),
 			expectedShould:  false,
 		},
@@ -921,7 +868,7 @@ func TestShouldProvision(t *testing.T) {
 			name:            "qualifier says yes, should provision",
 			provisionerName: "foo.bar/baz",
 			provisioner:     newTestQualifiedProvisioner(true),
-			class:           newBetaStorageClass("class-1", "foo.bar/baz", nil),
+			class:           newStorageClass("class-1", "foo.bar/baz"),
 			claim:           newClaim("claim-1", "1-1", "class-1", "foo.bar/baz", "", nil),
 			expectedShould:  true,
 		},
@@ -929,7 +876,7 @@ func TestShouldProvision(t *testing.T) {
 			name:            "if PVC is in delay binding mode, should not provision if annSelectedNode is not set",
 			provisionerName: "foo.bar/baz",
 			provisioner:     newTestProvisioner(),
-			class:           newBetaStorageClass("class-1", "foo.bar/baz", &modeWaitBeta),
+			class:           newStorageClassWithVolumeBindingMode("class-1", "foo.bar/baz", &modeWait),
 			claim:           newClaim("claim-1", "1-1", "class-1", "", "", map[string]string{annStorageProvisioner: "foo.bar/baz"}),
 			expectedShould:  false,
 		},
@@ -937,7 +884,7 @@ func TestShouldProvision(t *testing.T) {
 			name:            "if PVC is in delay binding mode, should provision if annSelectedNode is set",
 			provisionerName: "foo.bar/baz",
 			provisioner:     newTestProvisioner(),
-			class:           newBetaStorageClass("class-1", "foo.bar/baz", &modeWaitBeta),
+			class:           newStorageClassWithVolumeBindingMode("class-1", "foo.bar/baz", &modeWait),
 			claim:           newClaim("claim-1", "1-1", "class-1", "", "", map[string]string{annStorageProvisioner: "foo.bar/baz", annSelectedNode: "node1"}),
 			expectedShould:  true,
 		},
@@ -945,16 +892,12 @@ func TestShouldProvision(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			client := fake.NewSimpleClientset(test.claim)
-			serverVersion := defaultServerVersion
-			if test.serverGitVersion != "" {
-				serverVersion = test.serverGitVersion
-			}
 
 			var ctrl testProvisionController
 			if test.additionalProvisionerNames == nil {
-				ctrl = newTestProvisionController(client, test.provisionerName, test.provisioner, serverVersion)
+				ctrl = newTestProvisionController(client, test.provisionerName, test.provisioner)
 			} else {
-				ctrl = newTestProvisionControllerWithAdditionalNames(client, test.provisionerName, test.provisioner, serverVersion, test.additionalProvisionerNames)
+				ctrl = newTestProvisionControllerWithAdditionalNames(client, test.provisionerName, test.provisioner, test.additionalProvisionerNames)
 			}
 
 			if test.class != nil {
@@ -982,96 +925,78 @@ func TestShouldDelete(t *testing.T) {
 		provisionerName   string
 		volume            *v1.PersistentVolume
 		deletionTimestamp *metav1.Time
-		serverGitVersion  string
 		expectedShould    bool
 	}{
 		{
-			name:             "should delete",
-			provisionerName:  "foo.bar/baz",
-			volume:           newVolume("volume-1", v1.VolumeReleased, v1.PersistentVolumeReclaimDelete, map[string]string{annDynamicallyProvisioned: "foo.bar/baz"}),
-			serverGitVersion: "v1.5.0",
-			expectedShould:   true,
+			name:            "should delete",
+			provisionerName: "foo.bar/baz",
+			volume:          newVolume("volume-1", v1.VolumeReleased, v1.PersistentVolumeReclaimDelete, map[string]string{annDynamicallyProvisioned: "foo.bar/baz"}),
+			expectedShould:  true,
 		},
 		{
-			name:             "1.4 and failed: should delete",
-			provisionerName:  "foo.bar/baz",
-			volume:           newVolume("volume-1", v1.VolumeFailed, v1.PersistentVolumeReclaimDelete, map[string]string{annDynamicallyProvisioned: "foo.bar/baz"}),
-			serverGitVersion: "v1.4.0",
-			expectedShould:   true,
+			name:            "failed: shouldn't delete",
+			provisionerName: "foo.bar/baz",
+			volume:          newVolume("volume-1", v1.VolumeFailed, v1.PersistentVolumeReclaimDelete, map[string]string{annDynamicallyProvisioned: "foo.bar/baz"}),
+			expectedShould:  false,
 		},
 		{
-			name:             "1.5 and failed: shouldn't delete",
-			provisionerName:  "foo.bar/baz",
-			volume:           newVolume("volume-1", v1.VolumeFailed, v1.PersistentVolumeReclaimDelete, map[string]string{annDynamicallyProvisioned: "foo.bar/baz"}),
-			serverGitVersion: "v1.5.0",
-			expectedShould:   false,
+			name:            "volume still bound",
+			provisionerName: "foo.bar/baz",
+			volume:          newVolume("volume-1", v1.VolumeBound, v1.PersistentVolumeReclaimDelete, map[string]string{annDynamicallyProvisioned: "foo.bar/baz"}),
+			expectedShould:  false,
 		},
 		{
-			name:             "volume still bound",
-			provisionerName:  "foo.bar/baz",
-			volume:           newVolume("volume-1", v1.VolumeBound, v1.PersistentVolumeReclaimDelete, map[string]string{annDynamicallyProvisioned: "foo.bar/baz"}),
-			serverGitVersion: "v1.5.0",
-			expectedShould:   false,
+			name:            "non-delete reclaim policy",
+			provisionerName: "foo.bar/baz",
+			volume:          newVolume("volume-1", v1.VolumeReleased, v1.PersistentVolumeReclaimRetain, map[string]string{annDynamicallyProvisioned: "foo.bar/baz"}),
+			expectedShould:  false,
 		},
 		{
-			name:             "non-delete reclaim policy",
-			provisionerName:  "foo.bar/baz",
-			volume:           newVolume("volume-1", v1.VolumeReleased, v1.PersistentVolumeReclaimRetain, map[string]string{annDynamicallyProvisioned: "foo.bar/baz"}),
-			serverGitVersion: "v1.5.0",
-			expectedShould:   false,
+			name:            "not this provisioner's job",
+			provisionerName: "foo.bar/baz",
+			volume:          newVolume("volume-1", v1.VolumeReleased, v1.PersistentVolumeReclaimDelete, map[string]string{annDynamicallyProvisioned: "abc.def/ghi"}),
+			expectedShould:  false,
 		},
 		{
-			name:             "not this provisioner's job",
-			provisionerName:  "foo.bar/baz",
-			volume:           newVolume("volume-1", v1.VolumeReleased, v1.PersistentVolumeReclaimDelete, map[string]string{annDynamicallyProvisioned: "abc.def/ghi"}),
-			serverGitVersion: "v1.5.0",
-			expectedShould:   false,
-		},
-		{
-			name:              "1.9 non-nil deletion timestamp",
+			name:              "non-nil deletion timestamp",
 			provisionerName:   "foo.bar/baz",
 			volume:            newVolume("volume-1", v1.VolumeReleased, v1.PersistentVolumeReclaimDelete, map[string]string{annDynamicallyProvisioned: "foo.bar/baz"}),
 			deletionTimestamp: &timestamp,
-			serverGitVersion:  "v1.9.0",
 			expectedShould:    false,
 		},
 		{
-			name:             "1.9 nil deletion timestamp",
-			provisionerName:  "foo.bar/baz",
-			volume:           newVolume("volume-1", v1.VolumeReleased, v1.PersistentVolumeReclaimDelete, map[string]string{annDynamicallyProvisioned: "foo.bar/baz"}),
-			serverGitVersion: "v1.9.0",
-			expectedShould:   true,
+			name:            "nil deletion timestamp",
+			provisionerName: "foo.bar/baz",
+			volume:          newVolume("volume-1", v1.VolumeReleased, v1.PersistentVolumeReclaimDelete, map[string]string{annDynamicallyProvisioned: "foo.bar/baz"}),
+			expectedShould:  true,
 		},
 		{
 			name:            "migrated to",
 			provisionerName: "csi.driver",
 			volume: newVolume("volume-1", v1.VolumeReleased, v1.PersistentVolumeReclaimDelete,
 				map[string]string{annDynamicallyProvisioned: "foo.bar/baz", annMigratedTo: "csi.driver"}),
-			serverGitVersion: "v1.17.0",
-			expectedShould:   true,
+			expectedShould: true,
 		},
 		{
 			name:            "migrated to random",
 			provisionerName: "csi.driver",
 			volume: newVolume("volume-1", v1.VolumeReleased, v1.PersistentVolumeReclaimDelete,
 				map[string]string{annDynamicallyProvisioned: "foo.bar/baz", annMigratedTo: "some.foo.driver"}),
-			serverGitVersion: "v1.17.0",
-			expectedShould:   false,
+			expectedShould: false,
 		},
 		{
 			name:            "csidriver but no migrated annotation",
 			provisionerName: "csi.driver",
 			volume: newVolume("volume-1", v1.VolumeReleased, v1.PersistentVolumeReclaimDelete,
 				map[string]string{annDynamicallyProvisioned: "foo.bar/baz"}),
-			serverGitVersion: "v1.17.0",
-			expectedShould:   false,
+			expectedShould: false,
 		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			client := fake.NewSimpleClientset()
 			provisioner := newTestProvisioner()
-			ctrl := newTestProvisionController(client, test.provisionerName, provisioner, test.serverGitVersion)
+			ctrl := newTestProvisionController(client, test.provisionerName, provisioner)
 			test.volume.ObjectMeta.DeletionTimestamp = test.deletionTimestamp
 
 			should := ctrl.shouldDelete(context.Background(), test.volume)
@@ -1089,11 +1014,10 @@ func TestCanProvision(t *testing.T) {
 	)
 
 	tests := []struct {
-		name             string
-		provisioner      Provisioner
-		claim            *v1.PersistentVolumeClaim
-		serverGitVersion string
-		expectedCan      error
+		name        string
+		provisioner Provisioner
+		claim       *v1.PersistentVolumeClaim
+		expectedCan error
 	}{
 		// volumeMode tests for provisioner w/o BlockProvisoner I/F
 		{
@@ -1156,11 +1080,7 @@ func TestCanProvision(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			client := fake.NewSimpleClientset(test.claim)
-			serverVersion := defaultServerVersion
-			if test.serverGitVersion != "" {
-				serverVersion = test.serverGitVersion
-			}
-			ctrl := newTestProvisionController(client, provisionerName, test.provisioner, serverVersion)
+			ctrl := newTestProvisionController(client, provisionerName, test.provisioner)
 
 			can := ctrl.canProvision(context.Background(), test.claim)
 			if !reflect.DeepEqual(test.expectedCan, can) {
@@ -1176,30 +1096,16 @@ func TestControllerSharedInformers(t *testing.T) {
 		objs            []runtime.Object
 		provisionerName string
 		expectedVolumes []v1.PersistentVolume
-		serverVersion   string
 	}{
-		{
-			name: "provision for claim-1 with v1beta1 storage class",
-			objs: []runtime.Object{
-				newBetaStorageClass("class-1", "foo.bar/baz", nil),
-				newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil),
-			},
-			provisionerName: "foo.bar/baz",
-			serverVersion:   "v1.5.0",
-			expectedVolumes: []v1.PersistentVolume{
-				*newProvisionedVolume(newBetaStorageClass("class-1", "foo.bar/baz", nil), newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil)),
-			},
-		},
 		{
 			name: "provision for claim-1 with v1 storage class",
 			objs: []runtime.Object{
-				newStorageClassWithSpecifiedReclaimPolicy("class-1", "foo.bar/baz", v1.PersistentVolumeReclaimDelete),
+				newStorageClassWithReclaimPolicy("class-1", "foo.bar/baz", v1.PersistentVolumeReclaimDelete),
 				newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil),
 			},
 			provisionerName: "foo.bar/baz",
-			serverVersion:   "v1.8.0",
 			expectedVolumes: []v1.PersistentVolume{
-				*newProvisionedVolumeWithSpecifiedReclaimPolicy(newStorageClassWithSpecifiedReclaimPolicy("class-1", "foo.bar/baz", v1.PersistentVolumeReclaimDelete), newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil)),
+				*newProvisionedVolumeWithReclaimPolicy(newStorageClassWithReclaimPolicy("class-1", "foo.bar/baz", v1.PersistentVolumeReclaimDelete), newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil)),
 			},
 		},
 		{
@@ -1216,12 +1122,8 @@ func TestControllerSharedInformers(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			client := fake.NewSimpleClientset(test.objs...)
 
-			serverVersion := defaultServerVersion
-			if test.serverVersion != "" {
-				serverVersion = test.serverVersion
-			}
 			ctrl, informersFactory := newTestProvisionControllerSharedInformers(client, test.provisionerName,
-				newTestProvisioner(), serverVersion, sharedResyncPeriod)
+				newTestProvisioner(), sharedResyncPeriod)
 			stopCh := make(chan struct{})
 			defer close(stopCh)
 
@@ -1304,14 +1206,12 @@ func newTestProvisionController(
 	client kubernetes.Interface,
 	provisionerName string,
 	provisioner Provisioner,
-	serverGitVersion string,
 ) testProvisionController {
 	m := metrics.New(string(uuid.NewUUID()))
 	ctrl := NewProvisionController(
 		client,
 		provisionerName,
 		provisioner,
-		serverGitVersion,
 		MetricsInstance(m),
 		ResyncPeriod(resyncPeriod),
 		CreateProvisionedPVInterval(10*time.Millisecond),
@@ -1328,7 +1228,6 @@ func newTestProvisionControllerWithAdditionalNames(
 	client kubernetes.Interface,
 	provisionerName string,
 	provisioner Provisioner,
-	serverGitVersion string,
 	additionalProvisionerNames []string,
 ) testProvisionController {
 	m := metrics.New(string(uuid.NewUUID()))
@@ -1336,7 +1235,6 @@ func newTestProvisionControllerWithAdditionalNames(
 		client,
 		provisionerName,
 		provisioner,
-		serverGitVersion,
 		MetricsInstance(m),
 		ResyncPeriod(resyncPeriod),
 		CreateProvisionedPVInterval(10*time.Millisecond),
@@ -1354,7 +1252,6 @@ func newTestProvisionControllerSharedInformers(
 	client kubernetes.Interface,
 	provisionerName string,
 	provisioner Provisioner,
-	serverGitVersion string,
 	resyncPeriod time.Duration,
 ) (*ProvisionController, informers.SharedInformerFactory) {
 
@@ -1362,17 +1259,13 @@ func newTestProvisionControllerSharedInformers(
 	claimInformer := informerFactory.Core().V1().PersistentVolumeClaims().Informer()
 	volumeInformer := informerFactory.Core().V1().PersistentVolumes().Informer()
 	classInformer := func() cache.SharedIndexInformer {
-		if utilversion.MustParseSemantic(serverGitVersion).AtLeast(utilversion.MustParseSemantic("v1.6.0")) {
-			return informerFactory.Storage().V1().StorageClasses().Informer()
-		}
-		return informerFactory.Storage().V1beta1().StorageClasses().Informer()
+		return informerFactory.Storage().V1().StorageClasses().Informer()
 	}()
 
 	ctrl := NewProvisionController(
 		client,
 		provisionerName,
 		provisioner,
-		serverGitVersion,
 		ResyncPeriod(resyncPeriod),
 		CreateProvisionedPVInterval(10*time.Millisecond),
 		LeaseDuration(2*resyncPeriod),
@@ -1383,19 +1276,6 @@ func newTestProvisionControllerSharedInformers(
 		ClassesInformer(classInformer))
 
 	return ctrl, informerFactory
-}
-
-func newBetaStorageClass(name, provisioner string, mode *storagebeta.VolumeBindingMode) *storagebeta.StorageClass {
-	defaultReclaimPolicy := v1.PersistentVolumeReclaimDelete
-
-	return &storagebeta.StorageClass{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: name,
-		},
-		Provisioner:       provisioner,
-		ReclaimPolicy:     &defaultReclaimPolicy,
-		VolumeBindingMode: mode,
-	}
 }
 
 func newStorageClass(name, provisioner string) *storage.StorageClass {
@@ -1410,10 +1290,24 @@ func newStorageClass(name, provisioner string) *storage.StorageClass {
 	}
 }
 
-// newStorageClassWithSpecifiedReclaimPolicy returns the storage class object.
+// newStorageClassWithVolumeBindingMode returns the storage class object.
+func newStorageClassWithVolumeBindingMode(name, provisioner string, mode *storage.VolumeBindingMode) *storage.StorageClass {
+	defaultReclaimPolicy := v1.PersistentVolumeReclaimDelete
+
+	return &storage.StorageClass{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: name,
+		},
+		Provisioner:       provisioner,
+		ReclaimPolicy:     &defaultReclaimPolicy,
+		VolumeBindingMode: mode,
+	}
+}
+
+// newStorageClassWithReclaimPolicy returns the storage class object.
 // For Kubernetes version since v1.6.0, it will use the v1 storage class object.
 // Once we have tests for v1.6.0, we can add a new function for v1.8.0 newStorageClass since reclaim policy can only be specified since v1.8.0.
-func newStorageClassWithSpecifiedReclaimPolicy(name, provisioner string, reclaimPolicy v1.PersistentVolumeReclaimPolicy) *storage.StorageClass {
+func newStorageClassWithReclaimPolicy(name, provisioner string, reclaimPolicy v1.PersistentVolumeReclaimPolicy) *storage.StorageClass {
 	return &storage.StorageClass{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: name,
@@ -1460,8 +1354,6 @@ func newClaim(name, claimUID, class, provisioner, volumeName string, annotations
 			Phase: v1.ClaimPending,
 		},
 	}
-	// TODO remove annClass according to version of Kube.
-	claim.Annotations[annClass] = class
 	if provisioner != "" {
 		claim.Annotations[annStorageProvisioner] = provisioner
 	}
@@ -1507,24 +1399,20 @@ func newVolume(name string, phase v1.PersistentVolumePhase, policy v1.Persistent
 	return pv
 }
 
-// newProvisionedVolume returns the volume the test controller should provision for the
-// given claim with the given class.
-// For Kubernetes version before v1.6.0.
-func newProvisionedVolume(storageClass *storagebeta.StorageClass, claim *v1.PersistentVolumeClaim) *v1.PersistentVolume {
+// newProvisionedVolume returns the volume the test controller should provision
+// for the given claim with the given class.
+func newProvisionedVolume(storageClass *storage.StorageClass, claim *v1.PersistentVolumeClaim) *v1.PersistentVolume {
 	volume := constructProvisionedVolumeWithoutStorageClassInfo(claim, v1.PersistentVolumeReclaimDelete)
 
 	// pv.Annotations["pv.kubernetes.io/provisioned-by"] MUST be set to name of the external provisioner. This provisioner will be used to delete the volume.
-	// pv.Annotations["volume.beta.kubernetes.io/storage-class"] MUST be set to name of the storage class requested by the claim.
-	volume.Annotations = map[string]string{annDynamicallyProvisioned: storageClass.Provisioner, annClass: storageClass.Name}
+	volume.Annotations = map[string]string{annDynamicallyProvisioned: storageClass.Provisioner}
+	// pv.Spec.StorageClassName must be set to the name of the storage class requested by the claim
+	volume.Spec.StorageClassName = storageClass.Name
 
 	return volume
 }
 
-// newProvisionedVolumeForNewVersion returns the volume the test controller should provision for the
-// given claim with the given class.
-// For Kubernetes version since v1.6.0.
-// Once we have tests for v1.6.0, we can add a new function for v1.8.0 newProvisionedVolume since reclaim policy can only be specified since v1.8.0.
-func newProvisionedVolumeWithSpecifiedReclaimPolicy(storageClass *storage.StorageClass, claim *v1.PersistentVolumeClaim) *v1.PersistentVolume {
+func newProvisionedVolumeWithReclaimPolicy(storageClass *storage.StorageClass, claim *v1.PersistentVolumeClaim) *v1.PersistentVolume {
 	volume := constructProvisionedVolumeWithoutStorageClassInfo(claim, *storageClass.ReclaimPolicy)
 
 	// pv.Annotations["pv.kubernetes.io/provisioned-by"] MUST be set to name of the external provisioner. This provisioner will be used to delete the volume.
@@ -1727,7 +1615,7 @@ func (i *ignoredProvisioner) Provision(ctx context.Context, options ProvisionOpt
 		return nil, ProvisioningFinished, &IgnoredError{"Ignored"}
 	}
 
-	return newProvisionedVolume(newBetaStorageClass("class-1", "foo.bar/baz", nil), newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil)), ProvisioningFinished, nil
+	return newProvisionedVolume(newStorageClass("class-1", "foo.bar/baz"), newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil)), ProvisioningFinished, nil
 }
 
 func (i *ignoredProvisioner) Delete(ctx context.Context, volume *v1.PersistentVolume) error {
