@@ -143,7 +143,7 @@ func TestController(t *testing.T) {
 			additionalProvisionerNames: []string{"foo.bar/baz", "foo.xyz/baz"},
 			provisioner:                newTestProvisioner(),
 			expectedVolumes: []v1.PersistentVolume{
-				*newProvisionedVolume(newStorageClass("class-1", "csi.com/mock-csi"), newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil)),
+				*newProvisionedVolume(newStorageClass("class-1", "foo.bar/baz"), newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil)),
 			},
 			expectedMetrics: testMetrics{
 				provisioned: counts{

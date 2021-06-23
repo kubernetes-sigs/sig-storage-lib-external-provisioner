@@ -1391,7 +1391,7 @@ func (ctrl *ProvisionController) provisionClaimOperation(ctx context.Context, cl
 		volume.ObjectMeta.Finalizers = append(volume.ObjectMeta.Finalizers, finalizerPV)
 	}
 
-	metav1.SetMetaDataAnnotation(&volume.ObjectMeta, annDynamicallyProvisioned, ctrl.provisionerName)
+	metav1.SetMetaDataAnnotation(&volume.ObjectMeta, annDynamicallyProvisioned, class.Provisioner)
 	volume.Spec.StorageClassName = claimClass
 
 	klog.Info(logOperation(operation, "succeeded"))
