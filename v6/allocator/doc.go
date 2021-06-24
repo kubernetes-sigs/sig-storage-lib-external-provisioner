@@ -1,1 +1,0 @@
-../../allocator/doc.go
