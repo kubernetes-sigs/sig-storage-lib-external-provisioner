@@ -1,1 +1,0 @@
-../../../controller/metrics/doc.go
