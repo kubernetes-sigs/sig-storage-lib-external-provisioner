@@ -14,4 +14,4 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package controller // import "sigs.k8s.io/sig-storage-lib-external-provisioner/controller"
+package controller // import "sigs.k8s.io/sig-storage-lib-external-provisioner/v7/controller"
