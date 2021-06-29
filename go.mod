@@ -1,6 +1,6 @@
-module sigs.k8s.io/sig-storage-lib-external-provisioner
+module sigs.k8s.io/sig-storage-lib-external-provisioner/v7
 
-go 1.13
+go 1.16
 
 require (
 	github.com/miekg/dns v1.1.29
