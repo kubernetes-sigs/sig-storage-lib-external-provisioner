@@ -939,8 +939,7 @@ func (ctrl *ProvisionController) processNextClaimWorkItem(ctx context.Context) b
 				klog.Errorf("Giving up syncing claim %q because failures %v >= threshold %v", key, ctrl.claimQueue.NumRequeues(obj), ctrl.failedProvisionThreshold)
 				klog.V(2).Infof("Removing PVC %s from claims in progress", key)
 				ctrl.claimsInProgress.Delete(key) // This can leak a volume that's being provisioned in the background!
-				// Done but do not Forget: it will not be in the queue but NumRequeues
-				// will be saved until the obj is deleted from kubernetes
+				ctrl.claimQueue.Forget(obj)
 			}
 			return fmt.Errorf("error syncing claim %q: %s", key, err.Error())
 		}
