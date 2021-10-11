@@ -69,7 +69,8 @@ const annDynamicallyProvisioned = "pv.kubernetes.io/provisioned-by"
 // Deletion.
 const annMigratedTo = "pv.kubernetes.io/migrated-to"
 
-const annStorageProvisioner = "volume.beta.kubernetes.io/storage-provisioner"
+const annBetaStorageProvisioner = "volume.beta.kubernetes.io/storage-provisioner"
+const annStorageProvisioner = "volume.kubernetes.io/storage-provisioner"
 
 // This annotation is added to a PVC that has been triggered by scheduler to
 // be dynamically provisioned. Its value is the name of the selected node.
@@ -1134,7 +1135,12 @@ func (ctrl *ProvisionController) shouldProvision(ctx context.Context, claim *v1.
 		}
 	}
 
-	if provisioner, found := claim.Annotations[annStorageProvisioner]; found {
+	provisioner, found := claim.Annotations[annStorageProvisioner]
+	if !found {
+		provisioner, found = claim.Annotations[annBetaStorageProvisioner]
+	}
+
+	if found {
 		if ctrl.knownProvisioner(provisioner) {
 			claimClass := util.GetPersistentVolumeClaimClass(claim)
 			class, err := ctrl.getStorageClass(claimClass)

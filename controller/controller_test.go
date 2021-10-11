@@ -523,13 +523,13 @@ func TestController(t *testing.T) {
 			name: "remove selectedNode and claim on reschedule",
 			objs: []runtime.Object{
 				newStorageClassWithVolumeBindingMode("class-1", "foo.bar/baz", &modeWait),
-				newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", map[string]string{annStorageProvisioner: "foo.bar/baz", annSelectedNode: "node-1"}),
+				newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", map[string]string{annBetaStorageProvisioner: "foo.bar/baz", annSelectedNode: "node-1"}),
 				newNode("node-1"),
 			},
 			provisionerName: "foo.bar/baz",
 			provisioner:     newRescheduleTestProvisioner(),
 			expectedClaims: []v1.PersistentVolumeClaim{
-				*newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", map[string]string{annStorageProvisioner: "foo.bar/baz"}),
+				*newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", map[string]string{annBetaStorageProvisioner: "foo.bar/baz"}),
 			},
 			expectedClaimsInProgress: nil, // not in progress anymore
 			expectedMetrics: testMetrics{
@@ -542,12 +542,12 @@ func TestController(t *testing.T) {
 			name: "do not remove selectedNode after final error, only the claim",
 			objs: []runtime.Object{
 				newStorageClassWithVolumeBindingMode("class-1", "foo.bar/baz", &modeWait),
-				newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", map[string]string{annStorageProvisioner: "foo.bar/baz", annSelectedNode: "node-wrong"}),
+				newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", map[string]string{annBetaStorageProvisioner: "foo.bar/baz", annSelectedNode: "node-wrong"}),
 			},
 			provisionerName: "foo.bar/baz",
 			provisioner:     newBadTestProvisioner(),
 			expectedClaims: []v1.PersistentVolumeClaim{
-				*newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", map[string]string{annStorageProvisioner: "foo.bar/baz", annSelectedNode: "node-wrong"}),
+				*newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", map[string]string{annBetaStorageProvisioner: "foo.bar/baz", annSelectedNode: "node-wrong"}),
 			},
 			expectedClaimsInProgress: nil, // not in progress anymore
 			expectedMetrics: testMetrics{
@@ -560,12 +560,12 @@ func TestController(t *testing.T) {
 			name: "do not remove selectedNode if nothing changes",
 			objs: []runtime.Object{
 				newStorageClassWithVolumeBindingMode("class-1", "foo.bar/baz", &modeWait),
-				newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", map[string]string{annStorageProvisioner: "foo.bar/baz", annSelectedNode: "node-wrong"}),
+				newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", map[string]string{annBetaStorageProvisioner: "foo.bar/baz", annSelectedNode: "node-wrong"}),
 			},
 			provisionerName: "foo.bar/baz",
 			provisioner:     newNoChangeTestProvisioner(),
 			expectedClaims: []v1.PersistentVolumeClaim{
-				*newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", map[string]string{annStorageProvisioner: "foo.bar/baz", annSelectedNode: "node-wrong"}),
+				*newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", map[string]string{annBetaStorageProvisioner: "foo.bar/baz", annSelectedNode: "node-wrong"}),
 			},
 			expectedMetrics: testMetrics{
 				provisioned: counts{
@@ -577,13 +577,13 @@ func TestController(t *testing.T) {
 			name: "do not remove selectedNode while in progress",
 			objs: []runtime.Object{
 				newStorageClassWithVolumeBindingMode("class-1", "foo.bar/baz", &modeWait),
-				newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", map[string]string{annStorageProvisioner: "foo.bar/baz", annSelectedNode: "node-1"}),
+				newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", map[string]string{annBetaStorageProvisioner: "foo.bar/baz", annSelectedNode: "node-1"}),
 				newNode("node-1"),
 			},
 			provisionerName: "foo.bar/baz",
 			provisioner:     newTemporaryTestProvisioner(),
 			expectedClaims: []v1.PersistentVolumeClaim{
-				*newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", map[string]string{annStorageProvisioner: "foo.bar/baz", annSelectedNode: "node-1"}),
+				*newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", map[string]string{annBetaStorageProvisioner: "foo.bar/baz", annSelectedNode: "node-1"}),
 			},
 			expectedClaimsInProgress: []string{"uid-1-1"},
 			expectedMetrics: testMetrics{
@@ -837,7 +837,7 @@ func TestShouldProvision(t *testing.T) {
 			claim:           newClaim("claim-1", "1-1", "class-1", "abc.def/ghi", "", nil),
 			expectedShould:  false,
 		},
-		// Kubernetes 1.5 provisioning - annStorageProvisioner is set
+		// Kubernetes 1.5 provisioning - annBetaStorageProvisioner is set
 		// and only this annotation is evaluated
 		{
 			name:            "unknown provisioner annotation 1.5",
@@ -845,16 +845,26 @@ func TestShouldProvision(t *testing.T) {
 			provisioner:     newTestProvisioner(),
 			class:           newStorageClass("class-1", "foo.bar/baz"),
 			claim: newClaim("claim-1", "1-1", "class-1", "", "",
-				map[string]string{annStorageProvisioner: "abc.def/ghi"}),
+				map[string]string{annBetaStorageProvisioner: "abc.def/ghi"}),
 			expectedShould: false,
 		},
-		// Kubernetes 1.5 provisioning - annStorageProvisioner is not set
+		// Kubernetes 1.5 provisioning - annBetaStorageProvisioner is not set
 		{
 			name:            "no provisioner annotation 1.5",
 			provisionerName: "foo.bar/baz",
 			class:           newStorageClass("class-1", "foo.bar/baz"),
 			claim:           newClaim("claim-1", "1-1", "class-1", "", "", nil),
 			expectedShould:  false,
+		},
+		// Kubernetes 1.23 provisioning - annStorageProvisioner is set
+		{
+			name:            "unknown provisioner annotation 1.23",
+			provisionerName: "foo.bar/baz",
+			provisioner:     newTestProvisioner(),
+			class:           newStorageClass("class-1", "foo.bar/baz"),
+			claim: newClaim("claim-1", "1-1", "class-1", "", "",
+				map[string]string{annStorageProvisioner: "abc.def/ghi"}),
+			expectedShould: false,
 		},
 		{
 			name:            "qualifier says no",
@@ -877,11 +887,19 @@ func TestShouldProvision(t *testing.T) {
 			provisionerName: "foo.bar/baz",
 			provisioner:     newTestProvisioner(),
 			class:           newStorageClassWithVolumeBindingMode("class-1", "foo.bar/baz", &modeWait),
-			claim:           newClaim("claim-1", "1-1", "class-1", "", "", map[string]string{annStorageProvisioner: "foo.bar/baz"}),
+			claim:           newClaim("claim-1", "1-1", "class-1", "", "", map[string]string{annBetaStorageProvisioner: "foo.bar/baz"}),
 			expectedShould:  false,
 		},
 		{
 			name:            "if PVC is in delay binding mode, should provision if annSelectedNode is set",
+			provisionerName: "foo.bar/baz",
+			provisioner:     newTestProvisioner(),
+			class:           newStorageClassWithVolumeBindingMode("class-1", "foo.bar/baz", &modeWait),
+			claim:           newClaim("claim-1", "1-1", "class-1", "", "", map[string]string{annBetaStorageProvisioner: "foo.bar/baz", annSelectedNode: "node1"}),
+			expectedShould:  true,
+		},
+		{
+			name:            "if PVC is in delay binding mode, should provision if annSelectedNode is set with annStorageProvisioner",
 			provisionerName: "foo.bar/baz",
 			provisioner:     newTestProvisioner(),
 			class:           newStorageClassWithVolumeBindingMode("class-1", "foo.bar/baz", &modeWait),
@@ -1355,7 +1373,7 @@ func newClaim(name, claimUID, class, provisioner, volumeName string, annotations
 		},
 	}
 	if provisioner != "" {
-		claim.Annotations[annStorageProvisioner] = provisioner
+		claim.Annotations[annBetaStorageProvisioner] = provisioner
 	}
 	// Allow overwriting of above annotations
 	for k, v := range annotations {
