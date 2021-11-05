@@ -1099,13 +1099,44 @@ func (ctrl *ProvisionController) syncVolume(ctx context.Context, obj interface{}
 		return fmt.Errorf("expected volume but got %+v", obj)
 	}
 
+	volume, err := ctrl.handleProtectionFinalizer(ctx, volume)
+	if err != nil {
+		return err
+	}
+
 	if ctrl.shouldDelete(ctx, volume) {
 		startTime := time.Now()
-		err := ctrl.deleteVolumeOperation(ctx, volume)
+		err = ctrl.deleteVolumeOperation(ctx, volume)
 		ctrl.updateDeleteStats(volume, err, startTime)
 		return err
 	}
 	return nil
+}
+
+func (ctrl *ProvisionController) handleProtectionFinalizer(ctx context.Context, volume *v1.PersistentVolume) (*v1.PersistentVolume, error) {
+	var modifiedFinalizers []string
+	var modified bool
+	reclaimPolicy := volume.Spec.PersistentVolumeReclaimPolicy
+	// Check if the `addFinalizer` config option is disabled, i.e, rollback scenario, or the reclaim policy is changed
+	// to `Retain` or `Recycle`
+	if !ctrl.addFinalizer || reclaimPolicy == v1.PersistentVolumeReclaimRetain || reclaimPolicy == v1.PersistentVolumeReclaimRecycle {
+		modifiedFinalizers, modified = removeFinalizer(volume.ObjectMeta.Finalizers, finalizerPV)
+	}
+	// Add the finalizer only if `addFinalizer` config option is enabled, finalizer doesn't exist and PV is not already
+	// under deletion.
+	if ctrl.addFinalizer && reclaimPolicy == v1.PersistentVolumeReclaimDelete && volume.DeletionTimestamp == nil {
+		modifiedFinalizers, modified = addFinalizer(volume.ObjectMeta.Finalizers, finalizerPV)
+	}
+
+	if modified {
+		volume.ObjectMeta.Finalizers = modifiedFinalizers
+		newVolume, err := ctrl.updatePersistentVolume(ctx, volume)
+		if err != nil {
+			return volume, fmt.Errorf("failed to modify finalizers to %+v on volume %s err: %+v", modifiedFinalizers, volume.Name, err)
+		}
+		volume = newVolume
+	}
+	return volume, nil
 }
 
 // knownProvisioner checks if provisioner name has been
@@ -1174,10 +1205,15 @@ func (ctrl *ProvisionController) shouldDelete(ctx context.Context, volume *v1.Pe
 		}
 	}
 
-	if ctrl.addFinalizer && !ctrl.checkFinalizer(volume, finalizerPV) && volume.ObjectMeta.DeletionTimestamp != nil {
-		return false
-	} else if volume.ObjectMeta.DeletionTimestamp != nil {
-		return false
+	if ctrl.addFinalizer {
+		if !ctrl.checkFinalizer(volume, finalizerPV) && volume.ObjectMeta.DeletionTimestamp != nil {
+			// The finalizer was removed, i.e. the volume has been already deleted.
+			return false
+		}
+	} else {
+		if volume.ObjectMeta.DeletionTimestamp != nil {
+			return false
+		}
 	}
 
 	if volume.Status.Phase != v1.VolumeReleased {
@@ -1241,6 +1277,22 @@ func (ctrl *ProvisionController) updateDeleteStats(volume *v1.PersistentVolume, 
 		ctrl.metrics.PersistentVolumeDeleteDurationSeconds.WithLabelValues(class).Observe(time.Since(startTime).Seconds())
 		ctrl.metrics.PersistentVolumeDeleteTotal.WithLabelValues(class).Inc()
 	}
+}
+
+func (ctrl *ProvisionController) updatePersistentVolume(ctx context.Context, volume *v1.PersistentVolume) (*v1.PersistentVolume, error) {
+	if !metav1.HasAnnotation(volume.ObjectMeta, annDynamicallyProvisioned) {
+		return volume, nil
+	}
+	provisionedBy := volume.Annotations[annDynamicallyProvisioned]
+	migratedTo := volume.Annotations[annMigratedTo]
+	if provisionedBy != ctrl.provisionerName && migratedTo != ctrl.provisionerName {
+		return volume, nil
+	}
+	newVolume, err := ctrl.client.CoreV1().PersistentVolumes().Update(ctx, volume, metav1.UpdateOptions{})
+	if err != nil {
+		return volume, err
+	}
+	return newVolume, nil
 }
 
 // rescheduleProvisioning signal back to the scheduler to retry dynamic provisioning
@@ -1459,15 +1511,10 @@ func (ctrl *ProvisionController) deleteVolumeOperation(ctx context.Context, volu
 			if !ok {
 				return fmt.Errorf("expected volume but got %+v", volumeObj)
 			}
-			finalizers := make([]string, 0)
-			for _, finalizer := range newVolume.ObjectMeta.Finalizers {
-				if finalizer != finalizerPV {
-					finalizers = append(finalizers, finalizer)
-				}
-			}
+			finalizers, modified := removeFinalizer(newVolume.ObjectMeta.Finalizers, finalizerPV)
 
 			// Only update the finalizers if we actually removed something
-			if len(finalizers) != len(newVolume.ObjectMeta.Finalizers) {
+			if modified {
 				newVolume.ObjectMeta.Finalizers = finalizers
 				if _, err = ctrl.client.CoreV1().PersistentVolumes().Update(ctx, newVolume, metav1.UpdateOptions{}); err != nil {
 					if !apierrs.IsNotFound(err) {
@@ -1488,6 +1535,36 @@ func (ctrl *ProvisionController) deleteVolumeOperation(ctx context.Context, volu
 	}
 	klog.Info(logOperation(operation, "succeeded"))
 	return nil
+}
+
+func removeFinalizer(finalizers []string, finalizerToRemove string) ([]string, bool) {
+	modified := false
+	modifiedFinalizers := make([]string, 0)
+	for _, finalizer := range finalizers {
+		if finalizer != finalizerToRemove {
+			modifiedFinalizers = append(modifiedFinalizers, finalizer)
+		}
+	}
+	if len(modifiedFinalizers) == 0 {
+		modifiedFinalizers = nil
+	}
+	if len(modifiedFinalizers) != len(finalizers) {
+		modified = true
+	}
+	return modifiedFinalizers, modified
+}
+
+func addFinalizer(finalizers []string, finalizerToAdd string) ([]string, bool) {
+	modifiedFinalizers := make([]string, 0)
+	for _, finalizer := range finalizers {
+		if finalizer == finalizerToAdd {
+			// finalizer already exists
+			return finalizers, false
+		}
+	}
+	modifiedFinalizers = append(modifiedFinalizers, finalizers...)
+	modifiedFinalizers = append(modifiedFinalizers, finalizerToAdd)
+	return modifiedFinalizers, true
 }
 
 func logOperation(operation, format string, a ...interface{}) string {
