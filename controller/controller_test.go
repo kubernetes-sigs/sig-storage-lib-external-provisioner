@@ -1065,11 +1065,12 @@ func TestShouldProvision(t *testing.T) {
 func TestShouldDelete(t *testing.T) {
 	timestamp := metav1.NewTime(time.Now())
 	tests := []struct {
-		name              string
-		provisionerName   string
-		volume            *v1.PersistentVolume
-		deletionTimestamp *metav1.Time
-		expectedShould    bool
+		name                       string
+		provisionerName            string
+		additionalProvisionerNames []string
+		volume                     *v1.PersistentVolume
+		deletionTimestamp          *metav1.Time
+		expectedShould             bool
 	}{
 		{
 			name:            "should delete",
@@ -1132,12 +1133,30 @@ func TestShouldDelete(t *testing.T) {
 			volume:          newVolume("volume-1", v1.VolumeReleased, v1.PersistentVolumeReclaimDelete, map[string]string{annDynamicallyProvisioned: "foo.bar/baz"}, nil, nil),
 			expectedShould:  false,
 		},
+		{
+			name:                       "additional provisioner should delete",
+			provisionerName:            "foo.bar/baz",
+			additionalProvisionerNames: []string{"foo.bar/abc"},
+			volume:                     newVolume("volume-1", v1.VolumeReleased, v1.PersistentVolumeReclaimDelete, map[string]string{annDynamicallyProvisioned: "foo.bar/abc"}, nil, nil),
+			expectedShould:             true,
+		},
+		{
+			name:                       "not this additional provisioner's job",
+			provisionerName:            "foo.bar/baz",
+			additionalProvisionerNames: []string{"foo.bar/def"},
+			volume:                     newVolume("volume-1", v1.VolumeReleased, v1.PersistentVolumeReclaimDelete, map[string]string{annDynamicallyProvisioned: "foo.bar/abc"}, nil, nil),
+			expectedShould:             false,
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			client := fake.NewSimpleClientset()
 			provisioner := newTestProvisioner()
-			ctrl := newTestProvisionController(client, test.provisionerName, provisioner)
+			var options []func(*ProvisionController) error
+			if len(test.additionalProvisionerNames) > 0 {
+				options = append(options, AdditionalProvisionerNames(test.additionalProvisionerNames))
+			}
+			ctrl := newTestProvisionController(client, test.provisionerName, provisioner, options...)
 			test.volume.ObjectMeta.DeletionTimestamp = test.deletionTimestamp
 
 			should := ctrl.shouldDelete(context.Background(), test.volume)

@@ -1230,7 +1230,7 @@ func (ctrl *ProvisionController) shouldDelete(ctx context.Context, volume *v1.Pe
 
 	ann := volume.Annotations[annDynamicallyProvisioned]
 	migratedTo := volume.Annotations[annMigratedTo]
-	if ann != ctrl.provisionerName && migratedTo != ctrl.provisionerName {
+	if !ctrl.knownProvisioner(ann) && migratedTo != ctrl.provisionerName {
 		return false
 	}
 
@@ -1285,7 +1285,7 @@ func (ctrl *ProvisionController) updatePersistentVolume(ctx context.Context, vol
 	}
 	provisionedBy := volume.Annotations[annDynamicallyProvisioned]
 	migratedTo := volume.Annotations[annMigratedTo]
-	if provisionedBy != ctrl.provisionerName && migratedTo != ctrl.provisionerName {
+	if !ctrl.knownProvisioner(provisionedBy) && migratedTo != ctrl.provisionerName {
 		return volume, nil
 	}
 	newVolume, err := ctrl.client.CoreV1().PersistentVolumes().Update(ctx, volume, metav1.UpdateOptions{})
