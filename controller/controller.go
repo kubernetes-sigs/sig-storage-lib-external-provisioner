@@ -1528,12 +1528,7 @@ func (ctrl *ProvisionController) deleteVolumeOperation(ctx context.Context, volu
 		}
 	}
 
-	klog.Info(logOperation(operation, "persistentvolume deleted"))
-
-	if err = ctrl.volumes.Delete(volume); err != nil {
-		utilruntime.HandleError(err)
-	}
-	klog.Info(logOperation(operation, "succeeded"))
+	klog.Info(logOperation(operation, "persistentvolume deleted succeeded"))
 	return nil
 }
 
