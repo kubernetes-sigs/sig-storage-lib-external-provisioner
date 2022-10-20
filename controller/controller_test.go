@@ -714,6 +714,42 @@ func TestController(t *testing.T) {
 				},
 			},
 		},
+		{
+			name: "ensure finalizer is added on statically provisioned, migrated, in-tree volumes",
+			objs: []runtime.Object{
+				newVolume("volume-1", v1.VolumeBound, v1.PersistentVolumeReclaimDelete, map[string]string{annMigratedTo: "foo.bar/baz"}, nil, nil),
+			},
+			addFinalizer:    true,
+			provisionerName: "foo.bar/baz",
+			provisioner:     newTestProvisioner(),
+			expectedVolumes: []v1.PersistentVolume{
+				*newVolume("volume-1", v1.VolumeBound, v1.PersistentVolumeReclaimDelete, map[string]string{annMigratedTo: "foo.bar/baz"}, []string{finalizerPV}, nil),
+			},
+		},
+		{
+			name: "ensure finalizer is added on statically provisioned, migrated, in-tree volumes if it is in a Bound state",
+			objs: []runtime.Object{
+				newVolume("volume-1", v1.VolumeBound, v1.PersistentVolumeReclaimDelete, map[string]string{annMigratedTo: "foo.bar/baz"}, nil, nil),
+			},
+			addFinalizer:    true,
+			provisionerName: "foo.bar/baz",
+			provisioner:     newTestProvisioner(),
+			expectedVolumes: []v1.PersistentVolume{
+				*newVolume("volume-1", v1.VolumeBound, v1.PersistentVolumeReclaimDelete, map[string]string{annMigratedTo: "foo.bar/baz"}, []string{finalizerPV}, nil),
+			},
+		},
+		{
+			name: "ensure finalizer is added on statically provisioned CSI volumes if it is in a Bound state",
+			objs: []runtime.Object{
+				newCSIVolume("volume-1", v1.VolumeBound, v1.PersistentVolumeReclaimDelete, nil, nil, nil, "foo.bar/baz"),
+			},
+			addFinalizer:    true,
+			provisionerName: "foo.bar/baz",
+			provisioner:     newTestProvisioner(),
+			expectedVolumes: []v1.PersistentVolume{
+				*newCSIVolume("volume-1", v1.VolumeBound, v1.PersistentVolumeReclaimDelete, nil, []string{finalizerPV}, nil, "foo.bar/baz"),
+			},
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -1096,12 +1132,6 @@ func TestShouldDelete(t *testing.T) {
 			expectedShould:  false,
 		},
 		{
-			name:            "not this provisioner's job",
-			provisionerName: "foo.bar/baz",
-			volume:          newVolume("volume-1", v1.VolumeReleased, v1.PersistentVolumeReclaimDelete, map[string]string{annDynamicallyProvisioned: "abc.def/ghi"}, nil, nil),
-			expectedShould:  false,
-		},
-		{
 			name:              "non-nil deletion timestamp",
 			provisionerName:   "foo.bar/baz",
 			volume:            newVolume("volume-1", v1.VolumeReleased, v1.PersistentVolumeReclaimDelete, map[string]string{annDynamicallyProvisioned: "foo.bar/baz"}, nil, nil),
@@ -1120,18 +1150,6 @@ func TestShouldDelete(t *testing.T) {
 			volume:          newVolume("volume-1", v1.VolumeReleased, v1.PersistentVolumeReclaimDelete, map[string]string{annDynamicallyProvisioned: "foo.bar/baz", annMigratedTo: "csi.driver"}, nil, nil),
 			expectedShould:  true,
 		},
-		{
-			name:            "migrated to random",
-			provisionerName: "csi.driver",
-			volume:          newVolume("volume-1", v1.VolumeReleased, v1.PersistentVolumeReclaimDelete, map[string]string{annDynamicallyProvisioned: "foo.bar/baz", annMigratedTo: "some.foo.driver"}, nil, nil),
-			expectedShould:  false,
-		},
-		{
-			name:            "csidriver but no migrated annotation",
-			provisionerName: "csi.driver",
-			volume:          newVolume("volume-1", v1.VolumeReleased, v1.PersistentVolumeReclaimDelete, map[string]string{annDynamicallyProvisioned: "foo.bar/baz"}, nil, nil),
-			expectedShould:  false,
-		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -1141,6 +1159,93 @@ func TestShouldDelete(t *testing.T) {
 			test.volume.ObjectMeta.DeletionTimestamp = test.deletionTimestamp
 
 			should := ctrl.shouldDelete(context.Background(), test.volume)
+			if test.expectedShould != should {
+				t.Errorf("expected should delete %v but got %v\n", test.expectedShould, should)
+			}
+		})
+	}
+}
+
+func TestIsProvisionerForVolume(t *testing.T) {
+	tests := []struct {
+		name            string
+		provisionerName string
+		volume          *v1.PersistentVolume
+		expectedShould  bool
+	}{
+		{
+			name:            "known dynamically provisioned in-tree volume",
+			provisionerName: "foo.bar/baz",
+			volume:          newVolume("volume-1", v1.VolumeAvailable, v1.PersistentVolumeReclaimDelete, map[string]string{annDynamicallyProvisioned: "foo.bar/baz"}, nil, nil),
+			expectedShould:  true,
+		},
+		{
+			name:            "known dynamically provisioned in-tree migrated volume",
+			provisionerName: "foo.bar/baz",
+			volume:          newVolume("volume-1", v1.VolumeAvailable, v1.PersistentVolumeReclaimDelete, map[string]string{annDynamicallyProvisioned: "foo.bar/baz", annMigratedTo: "foo.bar/baz"}, nil, nil),
+			expectedShould:  true,
+		},
+		{
+			name:            "unknown dynamically provisioned in-tree volume",
+			provisionerName: "foo.bar1/baz1",
+			volume:          newVolume("volume-1", v1.VolumeAvailable, v1.PersistentVolumeReclaimDelete, map[string]string{annDynamicallyProvisioned: "foo.bar/baz"}, nil, nil),
+			expectedShould:  false,
+		},
+		{
+			name:            "unknown dynamically provisioned in-tree migrated volume",
+			provisionerName: "foo.bar1/baz1",
+			volume:          newVolume("volume-1", v1.VolumeAvailable, v1.PersistentVolumeReclaimDelete, map[string]string{annDynamicallyProvisioned: "foo.bar/baz", annMigratedTo: "foo.bar/baz"}, nil, nil),
+			expectedShould:  false,
+		},
+		{
+			name:            "known dynamically provisioned csi volume",
+			provisionerName: "foo.bar/baz",
+			volume:          newCSIVolume("volume-1", v1.VolumeBound, v1.PersistentVolumeReclaimDelete, map[string]string{annDynamicallyProvisioned: "foo.bar/baz"}, nil, nil, "foo.bar/baz"),
+			expectedShould:  true,
+		},
+		{
+			name:            "unknown dynamically provisioned csi volume",
+			provisionerName: "foo.bar1/baz1",
+			volume:          newCSIVolume("volume-1", v1.VolumeBound, v1.PersistentVolumeReclaimDelete, map[string]string{annDynamicallyProvisioned: "foo.bar/baz"}, nil, nil, "foo.bar/baz"),
+			expectedShould:  false,
+		},
+		{
+			name:            "known statically provisioned csi volume",
+			provisionerName: "foo.bar/baz",
+			volume:          newCSIVolume("volume-1", v1.VolumeBound, v1.PersistentVolumeReclaimDelete, nil, nil, nil, "foo.bar/baz"),
+			expectedShould:  true,
+		},
+		{
+			name:            "unknown statically provisioned csi volume",
+			provisionerName: "foo.bar1/baz1",
+			volume:          newCSIVolume("volume-1", v1.VolumeBound, v1.PersistentVolumeReclaimDelete, nil, nil, nil, "foo.bar/baz"),
+			expectedShould:  false,
+		},
+		{
+			name:            "statically provisioned in-tree volume always return false", // always return false for statically provisioned in-tree volumes
+			provisionerName: "foo.bar/baz",
+			volume:          newVolume("volume-1", v1.VolumeAvailable, v1.PersistentVolumeReclaimDelete, nil, nil, nil),
+			expectedShould:  false,
+		},
+		{
+			name:            "known statically provisioned in-tree migrate volume",
+			provisionerName: "foo.bar/baz",
+			volume:          newVolume("volume-1", v1.VolumeAvailable, v1.PersistentVolumeReclaimDelete, map[string]string{annMigratedTo: "foo.bar/baz"}, nil, nil),
+			expectedShould:  true,
+		},
+		{
+			name:            "unknown statically provisioned in-tree migrate volume",
+			provisionerName: "foo.bar1/baz1",
+			volume:          newVolume("volume-1", v1.VolumeAvailable, v1.PersistentVolumeReclaimDelete, map[string]string{annMigratedTo: "foo.bar/baz"}, nil, nil),
+			expectedShould:  false,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			client := fake.NewSimpleClientset()
+			provisioner := newTestProvisioner()
+			ctrl := newTestProvisionController(client, test.provisionerName, provisioner)
+			should := ctrl.isProvisionerForVolume(context.Background(), test.volume)
 			if test.expectedShould != should {
 				t.Errorf("expected should delete %v but got %v\n", test.expectedShould, should)
 			}
@@ -1715,6 +1820,38 @@ func newVolume(name string, phase v1.PersistentVolumePhase, policy v1.Persistent
 					Server:   "foo",
 					Path:     "bar",
 					ReadOnly: false,
+				},
+			},
+		},
+		Status: v1.PersistentVolumeStatus{
+			Phase: phase,
+		},
+	}
+	return pv
+}
+
+func newCSIVolume(name string, phase v1.PersistentVolumePhase, policy v1.PersistentVolumeReclaimPolicy,
+	annotations map[string]string, finalizers []string, deletionTimestamp *metav1.Time, provisionerName string) *v1.PersistentVolume {
+	pv := &v1.PersistentVolume{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              name,
+			Annotations:       annotations,
+			Finalizers:        finalizers,
+			DeletionTimestamp: deletionTimestamp,
+			SelfLink:          "/api/v1/persistentvolumes/" + name,
+		},
+		Spec: v1.PersistentVolumeSpec{
+			PersistentVolumeReclaimPolicy: policy,
+			AccessModes:                   []v1.PersistentVolumeAccessMode{v1.ReadWriteOnce, v1.ReadOnlyMany},
+			Capacity: v1.ResourceList{
+				v1.ResourceName(v1.ResourceStorage): resource.MustParse("1Mi"),
+			},
+			PersistentVolumeSource: v1.PersistentVolumeSource{
+				CSI: &v1.CSIPersistentVolumeSource{
+					Driver:       provisionerName,
+					VolumeHandle: "test-volume-id-1",
+					ReadOnly:     false,
+					FSType:       "ext4",
 				},
 			},
 		},
