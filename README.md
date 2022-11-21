@@ -14,7 +14,7 @@ Contains the Provisioner interface and ProvisionController, a custom Kubernetes 
 Contains an assortment of useful functions, e.g. any used by [in-tree plugins](https://github.com/kubernetes/kubernetes/tree/master/pkg/volume) that aren't otherwise easily importable.
 
 ### `gidallocator` and `allocator`
-`gidallocator` is used to allocate a GID from a range specified by StorageClass parameters gidMin & gidMax. `allocator` is the underlying implementation and can be used to write other allocators. An example use-case for `gidallocator` is an NFS-based provisioner that chowns each export to a unique GID. See [Volume Security](https://docs.openshift.com/container-platform/3.11/install_config/persistent_storage/pod_security_context.html#supplemental-groups/) for more context. Adapted from the in-tree [glusterfs plugin](https://github.com/kubernetes/kubernetes/blob/master/pkg/volume/glusterfs).
+`gidallocator` is used to allocate a GID from a range specified by StorageClass parameters gidMin & gidMax. `allocator` is the underlying implementation and can be used to write other allocators. An example use-case for `gidallocator` is an NFS-based provisioner that chowns each export to a unique GID. See [Volume Security](https://docs.openshift.com/container-platform/3.11/install_config/persistent_storage/pod_security_context.html#supplemental-groups/) for more context.
 
 ### `mount`
 Is used to read the mount table. Copied from [moby](https://github.com/moby/moby/tree/17.05.x/pkg/mount).
