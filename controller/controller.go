@@ -1099,6 +1099,11 @@ func (ctrl *ProvisionController) syncVolume(ctx context.Context, obj interface{}
 		return fmt.Errorf("expected volume but got %+v", obj)
 	}
 
+	if !ctrl.isProvisionerForVolume(ctx, volume) {
+		// Current provisioner is not responsible for the volume
+		return nil
+	}
+
 	volume, err := ctrl.handleProtectionFinalizer(ctx, volume)
 	if err != nil {
 		return err
@@ -1113,26 +1118,57 @@ func (ctrl *ProvisionController) syncVolume(ctx context.Context, obj interface{}
 	return nil
 }
 
+func (ctrl *ProvisionController) isProvisionerForVolume(ctx context.Context, volume *v1.PersistentVolume) bool {
+	if metav1.HasAnnotation(volume.ObjectMeta, annDynamicallyProvisioned) {
+		provisionPluginName := volume.Annotations[annDynamicallyProvisioned]
+		migratedAnn := volume.Annotations[annMigratedTo]
+		// Determine if the PV is owned by the current provisioner.
+		if !ctrl.knownProvisioner(provisionPluginName) && !ctrl.knownProvisioner(migratedAnn) {
+			// The current provisioner is not responsible for adding the finalizer
+			return false
+		}
+	} else {
+		// Statically provisioned volume. Check if the volume type is CSI.
+		if volume.Spec.PersistentVolumeSource.CSI != nil {
+			volumeProvisioner := volume.Spec.CSI.Driver
+			if !ctrl.knownProvisioner(volumeProvisioner) {
+				return false
+			}
+		} else {
+			// Check if the volume is being migrated
+			migratedAnn := volume.Annotations[annMigratedTo]
+			if !ctrl.knownProvisioner(migratedAnn) {
+				// The current provisioner is not responsible for adding the finalizer
+				return false
+			}
+		}
+	}
+	return true
+}
+
 func (ctrl *ProvisionController) handleProtectionFinalizer(ctx context.Context, volume *v1.PersistentVolume) (*v1.PersistentVolume, error) {
-	var modifiedFinalizers []string
 	var modified bool
+	klog.V(4).Infof("handleProtectionFinalizer Volume : %+v", volume)
 	reclaimPolicy := volume.Spec.PersistentVolumeReclaimPolicy
+	volumeFinalizers := volume.ObjectMeta.Finalizers
+
+	// Add the finalizer only if `addFinalizer` config option is enabled, finalizer doesn't exist and PV is not already
+	// under deletion.
+	if ctrl.addFinalizer && reclaimPolicy == v1.PersistentVolumeReclaimDelete && volume.DeletionTimestamp == nil && volume.Status.Phase == v1.VolumeBound {
+		volumeFinalizers, modified = addFinalizer(volumeFinalizers, finalizerPV)
+	}
+
 	// Check if the `addFinalizer` config option is disabled, i.e, rollback scenario, or the reclaim policy is changed
 	// to `Retain` or `Recycle`
 	if !ctrl.addFinalizer || reclaimPolicy == v1.PersistentVolumeReclaimRetain || reclaimPolicy == v1.PersistentVolumeReclaimRecycle {
-		modifiedFinalizers, modified = removeFinalizer(volume.ObjectMeta.Finalizers, finalizerPV)
-	}
-	// Add the finalizer only if `addFinalizer` config option is enabled, finalizer doesn't exist and PV is not already
-	// under deletion.
-	if ctrl.addFinalizer && reclaimPolicy == v1.PersistentVolumeReclaimDelete && volume.DeletionTimestamp == nil {
-		modifiedFinalizers, modified = addFinalizer(volume.ObjectMeta.Finalizers, finalizerPV)
+		volumeFinalizers, modified = removeFinalizer(volumeFinalizers, finalizerPV)
 	}
 
 	if modified {
-		volume.ObjectMeta.Finalizers = modifiedFinalizers
+		volume.ObjectMeta.Finalizers = volumeFinalizers
 		newVolume, err := ctrl.updatePersistentVolume(ctx, volume)
 		if err != nil {
-			return volume, fmt.Errorf("failed to modify finalizers to %+v on volume %s err: %+v", modifiedFinalizers, volume.Name, err)
+			return volume, fmt.Errorf("failed to modify finalizers to %+v on volume %s err: %+v", volumeFinalizers, volume.Name, err)
 		}
 		volume = newVolume
 	}
@@ -1224,16 +1260,6 @@ func (ctrl *ProvisionController) shouldDelete(ctx context.Context, volume *v1.Pe
 		return false
 	}
 
-	if !metav1.HasAnnotation(volume.ObjectMeta, annDynamicallyProvisioned) {
-		return false
-	}
-
-	ann := volume.Annotations[annDynamicallyProvisioned]
-	migratedTo := volume.Annotations[annMigratedTo]
-	if ann != ctrl.provisionerName && migratedTo != ctrl.provisionerName {
-		return false
-	}
-
 	return true
 }
 
@@ -1280,14 +1306,6 @@ func (ctrl *ProvisionController) updateDeleteStats(volume *v1.PersistentVolume, 
 }
 
 func (ctrl *ProvisionController) updatePersistentVolume(ctx context.Context, volume *v1.PersistentVolume) (*v1.PersistentVolume, error) {
-	if !metav1.HasAnnotation(volume.ObjectMeta, annDynamicallyProvisioned) {
-		return volume, nil
-	}
-	provisionedBy := volume.Annotations[annDynamicallyProvisioned]
-	migratedTo := volume.Annotations[annMigratedTo]
-	if provisionedBy != ctrl.provisionerName && migratedTo != ctrl.provisionerName {
-		return volume, nil
-	}
 	newVolume, err := ctrl.client.CoreV1().PersistentVolumes().Update(ctx, volume, metav1.UpdateOptions{})
 	if err != nil {
 		return volume, err
