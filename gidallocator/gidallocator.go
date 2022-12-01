@@ -113,12 +113,10 @@ func (a *Allocator) Release(volume *v1.PersistentVolume) error {
 	return nil
 }
 
-//
 // Return the gid table for a storage class.
-// - If this is the first time, fill it with all the gids
-//   used in PVs of this storage class by traversing the PVs.
-// - Adapt the range of the table to the current range of the SC.
-//
+//   - If this is the first time, fill it with all the gids
+//     used in PVs of this storage class by traversing the PVs.
+//   - Adapt the range of the table to the current range of the SC.
 func (a *Allocator) getGidTable(className string, min int, max int) (*allocator.MinMaxAllocator, error) {
 	var err error
 	a.gidTableLock.Lock()
@@ -174,7 +172,6 @@ func (a *Allocator) getGidTable(className string, min int, max int) (*allocator.
 
 // Traverse the PVs, fetching all the GIDs from those
 // in a given storage class, and mark them in the table.
-//
 func (a *Allocator) collectGids(className string, gidTable *allocator.MinMaxAllocator) error {
 	pvList, err := a.client.CoreV1().PersistentVolumes().List(context.Background(), metav1.ListOptions{})
 	if err != nil {
