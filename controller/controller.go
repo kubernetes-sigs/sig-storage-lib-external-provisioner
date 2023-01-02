@@ -1284,14 +1284,18 @@ func (ctrl *ProvisionController) checkFinalizer(volume *v1.PersistentVolume, fin
 
 func (ctrl *ProvisionController) updateProvisionStats(claim *v1.PersistentVolumeClaim, err error, startTime time.Time) {
 	class := ""
+	source := ""
 	if claim.Spec.StorageClassName != nil {
 		class = *claim.Spec.StorageClassName
 	}
+	if claim.Spec.DataSource != nil {
+		source = claim.Spec.DataSource.Kind
+	}
 	if err != nil {
-		ctrl.metrics.PersistentVolumeClaimProvisionFailedTotal.WithLabelValues(class).Inc()
+		ctrl.metrics.PersistentVolumeClaimProvisionFailedTotal.WithLabelValues(class, source).Inc()
 	} else {
-		ctrl.metrics.PersistentVolumeClaimProvisionDurationSeconds.WithLabelValues(class).Observe(time.Since(startTime).Seconds())
-		ctrl.metrics.PersistentVolumeClaimProvisionTotal.WithLabelValues(class).Inc()
+		ctrl.metrics.PersistentVolumeClaimProvisionDurationSeconds.WithLabelValues(class, source).Observe(time.Since(startTime).Seconds())
+		ctrl.metrics.PersistentVolumeClaimProvisionTotal.WithLabelValues(class, source).Inc()
 	}
 }
 
