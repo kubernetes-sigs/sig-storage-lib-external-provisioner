@@ -14,4 +14,4 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package gidallocator // import "sigs.k8s.io/sig-storage-lib-external-provisioner/v8/gidallocator"
+package gidallocator // import "sigs.k8s.io/sig-storage-lib-external-provisioner/v9/gidallocator"

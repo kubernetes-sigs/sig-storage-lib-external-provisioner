@@ -1,3 +1,13 @@
+# Release notes for v9.0.1
+
+# Changelog since v9.0.0
+
+## Changes by Kind
+
+### Uncategorized
+
+- Fixed go.mod for v9.
+
 # Release notes for v9.0.0
 
 # Changelog since v8.0.0
@@ -9,6 +19,7 @@
 - Action Needed: Updated leader election to use Endpoints + Lease. All provisioners based on this library must have RBAC permissions to create/update Lease objects in coordination.k8s.io/v1 API. ([#120](https://github.com/kubernetes-sigs/sig-storage-lib-external-provisioner/pull/120), [@NikhilSharmaWe](https://github.com/NikhilSharmaWe))
 - Added a new label `source` to `controller_persistentvolumeclaim_provision_total` metric. ([#128](https://github.com/kubernetes-sigs/sig-storage-lib-external-provisioner/pull/128), [@RaunakShah](https://github.com/RaunakShah))
 - Added support for `external-provisioner.volume.kubernetes.io/finalizer` on statically provisioned volumes. ([#129](https://github.com/kubernetes-sigs/sig-storage-lib-external-provisioner/pull/129), [@deepakkinni](https://github.com/deepakkinni))
+
 
 ## Dependencies
 

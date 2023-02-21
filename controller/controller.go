@@ -52,8 +52,8 @@ import (
 	ref "k8s.io/client-go/tools/reference"
 	"k8s.io/client-go/util/workqueue"
 	klog "k8s.io/klog/v2"
-	"sigs.k8s.io/sig-storage-lib-external-provisioner/v8/controller/metrics"
-	"sigs.k8s.io/sig-storage-lib-external-provisioner/v8/util"
+	"sigs.k8s.io/sig-storage-lib-external-provisioner/v9/controller/metrics"
+	"sigs.k8s.io/sig-storage-lib-external-provisioner/v9/util"
 )
 
 // This annotation is added to a PV that has been dynamically provisioned by
