@@ -1386,6 +1386,10 @@ func (ctrl *ProvisionController) provisionClaimOperation(ctx context.Context, cl
 			selectedNode, err = ctrl.client.CoreV1().Nodes().Get(ctx, nodeName, metav1.GetOptions{}) // TODO (verult) cache Nodes
 		}
 		if err != nil {
+			// if node does not exist, reschedule and remove volume.kubernetes.io/selected-node annotation
+			if apierrs.IsNotFound(err) {
+				return ctrl.provisionVolumeErrorHandling(ctx, ProvisioningReschedule, err, claim, operation)
+			}
 			err = fmt.Errorf("failed to get target node: %v", err)
 			ctrl.eventRecorder.Event(claim, v1.EventTypeWarning, "ProvisioningFailed", err.Error())
 			return ProvisioningNoChange, err
@@ -1408,35 +1412,9 @@ func (ctrl *ProvisionController) provisionClaimOperation(ctx context.Context, cl
 			klog.Info(logOperation(operation, "volume provision ignored: %v", ierr))
 			return ProvisioningFinished, errStopProvision
 		}
-		err = fmt.Errorf("failed to provision volume with StorageClass %q: %v", claimClass, err)
-		ctrl.eventRecorder.Event(claim, v1.EventTypeWarning, "ProvisioningFailed", err.Error())
-		if _, ok := claim.Annotations[annSelectedNode]; ok && result == ProvisioningReschedule {
-			// For dynamic PV provisioning with delayed binding, the provisioner may fail
-			// because the node is wrong (permanent error) or currently unusable (not enough
-			// capacity). If the provisioner wants to give up scheduling with the currently
-			// selected node, then it can ask for that by returning ProvisioningReschedule
-			// as state.
-			//
-			// `selectedNode` must be removed to notify scheduler to schedule again.
-			if errLabel := ctrl.rescheduleProvisioning(ctx, claim); errLabel != nil {
-				klog.Info(logOperation(operation, "volume rescheduling failed: %v", errLabel))
-				// If unsetting that label fails in ctrl.rescheduleProvisioning, we
-				// keep the volume in the work queue as if the provisioner had
-				// returned ProvisioningFinished and simply try again later.
-				return ProvisioningFinished, err
-			}
-			// Label was removed, stop working on the volume.
-			klog.Info(logOperation(operation, "volume rescheduled because: %v", err))
-			return ProvisioningFinished, errStopProvision
-		}
 
-		// ProvisioningReschedule shouldn't have been returned for volumes without selected node,
-		// but if we get it anyway, then treat it like ProvisioningFinished because we cannot
-		// reschedule.
-		if result == ProvisioningReschedule {
-			result = ProvisioningFinished
-		}
-		return result, err
+		err = fmt.Errorf("failed to provision volume with StorageClass %q: %v", claimClass, err)
+		return ctrl.provisionVolumeErrorHandling(ctx, result, err, claim, operation)
 	}
 
 	klog.Info(logOperation(operation, "volume %q provisioned", volume.Name))
@@ -1461,6 +1439,37 @@ func (ctrl *ProvisionController) provisionClaimOperation(ctx context.Context, cl
 		utilruntime.HandleError(err)
 	}
 	return ProvisioningFinished, nil
+}
+
+func (ctrl *ProvisionController) provisionVolumeErrorHandling(ctx context.Context, result ProvisioningState, err error, claim *v1.PersistentVolumeClaim, operation string) (ProvisioningState, error) {
+	ctrl.eventRecorder.Event(claim, v1.EventTypeWarning, "ProvisioningFailed", err.Error())
+	if _, ok := claim.Annotations[annSelectedNode]; ok && result == ProvisioningReschedule {
+		// For dynamic PV provisioning with delayed binding, the provisioner may fail
+		// because the node is wrong (permanent error) or currently unusable (not enough
+		// capacity). If the provisioner wants to give up scheduling with the currently
+		// selected node, then it can ask for that by returning ProvisioningReschedule
+		// as state.
+		//
+		// `selectedNode` must be removed to notify scheduler to schedule again.
+		if errLabel := ctrl.rescheduleProvisioning(ctx, claim); errLabel != nil {
+			klog.Info(logOperation(operation, "volume rescheduling failed: %v", errLabel))
+			// If unsetting that label fails in ctrl.rescheduleProvisioning, we
+			// keep the volume in the work queue as if the provisioner had
+			// returned ProvisioningFinished and simply try again later.
+			return ProvisioningFinished, err
+		}
+		// Label was removed, stop working on the volume.
+		klog.Info(logOperation(operation, "volume rescheduled because: %v", err))
+		return ProvisioningFinished, errStopProvision
+	}
+
+	// ProvisioningReschedule shouldn't have been returned for volumes without selected node,
+	// but if we get it anyway, then treat it like ProvisioningFinished because we cannot
+	// reschedule.
+	if result == ProvisioningReschedule {
+		result = ProvisioningFinished
+	}
+	return result, err
 }
 
 // deleteVolumeOperation attempts to delete the volume backing the given
