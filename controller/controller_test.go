@@ -544,12 +544,31 @@ func TestController(t *testing.T) {
 			name: "do not remove selectedNode after final error, only the claim",
 			objs: []runtime.Object{
 				newStorageClassWithVolumeBindingMode("class-1", "foo.bar/baz", &modeWait),
+				newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", map[string]string{annBetaStorageProvisioner: "foo.bar/baz", annSelectedNode: "node-1"}),
+				newNode("node-1"),
+			},
+			provisionerName: "foo.bar/baz",
+			provisioner:     newBadTestProvisioner(),
+			expectedClaims: []v1.PersistentVolumeClaim{
+				*newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", map[string]string{annBetaStorageProvisioner: "foo.bar/baz", annSelectedNode: "node-1"}),
+			},
+			expectedClaimsInProgress: nil, // not in progress anymore
+			expectedMetrics: testMetrics{
+				provisioned: counts{
+					"class-1": count{failed: 1},
+				},
+			},
+		},
+		{
+			name: "remove selectedNode if no node exists",
+			objs: []runtime.Object{
+				newStorageClassWithVolumeBindingMode("class-1", "foo.bar/baz", &modeWait),
 				newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", map[string]string{annBetaStorageProvisioner: "foo.bar/baz", annSelectedNode: "node-wrong"}),
 			},
 			provisionerName: "foo.bar/baz",
 			provisioner:     newBadTestProvisioner(),
 			expectedClaims: []v1.PersistentVolumeClaim{
-				*newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", map[string]string{annBetaStorageProvisioner: "foo.bar/baz", annSelectedNode: "node-wrong"}),
+				*newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", map[string]string{annBetaStorageProvisioner: "foo.bar/baz"}),
 			},
 			expectedClaimsInProgress: nil, // not in progress anymore
 			expectedMetrics: testMetrics{
@@ -562,12 +581,30 @@ func TestController(t *testing.T) {
 			name: "do not remove selectedNode if nothing changes",
 			objs: []runtime.Object{
 				newStorageClassWithVolumeBindingMode("class-1", "foo.bar/baz", &modeWait),
+				newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", map[string]string{annBetaStorageProvisioner: "foo.bar/baz", annSelectedNode: "node-1"}),
+				newNode("node-1"),
+			},
+			provisionerName: "foo.bar/baz",
+			provisioner:     newNoChangeTestProvisioner(),
+			expectedClaims: []v1.PersistentVolumeClaim{
+				*newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", map[string]string{annBetaStorageProvisioner: "foo.bar/baz", annSelectedNode: "node-1"}),
+			},
+			expectedMetrics: testMetrics{
+				provisioned: counts{
+					"class-1": count{failed: 1},
+				},
+			},
+		},
+		{
+			name: "remove selectedNode if nothing changes and no node exists",
+			objs: []runtime.Object{
+				newStorageClassWithVolumeBindingMode("class-1", "foo.bar/baz", &modeWait),
 				newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", map[string]string{annBetaStorageProvisioner: "foo.bar/baz", annSelectedNode: "node-wrong"}),
 			},
 			provisionerName: "foo.bar/baz",
 			provisioner:     newNoChangeTestProvisioner(),
 			expectedClaims: []v1.PersistentVolumeClaim{
-				*newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", map[string]string{annBetaStorageProvisioner: "foo.bar/baz", annSelectedNode: "node-wrong"}),
+				*newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", map[string]string{annBetaStorageProvisioner: "foo.bar/baz"}),
 			},
 			expectedMetrics: testMetrics{
 				provisioned: counts{
