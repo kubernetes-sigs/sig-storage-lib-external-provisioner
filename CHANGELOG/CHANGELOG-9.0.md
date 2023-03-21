@@ -1,3 +1,13 @@
+# Release notes for v9.0.2
+
+# Changelog since v9.0.1
+
+## Changes by Kind
+
+### Uncategorized
+
+- Fix indefinite stuck Pending pod on a deleted node ([#139](https://github.com/kubernetes-sigs/sig-storage-lib-external-provisioner/pull/139), [@sunnylovestiramisu](https://github.com/sunnylovestiramisu))
+
 # Release notes for v9.0.1
 
 # Changelog since v9.0.0
