@@ -38,7 +38,7 @@ cleanup() {
 }
 
 pushd "${boilerDir}" >/dev/null
-if ! python -m unittest boilerplate_test 2>"${unitTestOut}"; then
+if ! python3 -m unittest boilerplate_test 2>"${unitTestOut}"; then
 	echo "boilerplate_test.py failed"
 	echo
 	cat "${unitTestOut}"
