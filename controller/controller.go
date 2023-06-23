@@ -1356,7 +1356,7 @@ func (ctrl *ProvisionController) provisionClaimOperation(ctx context.Context, cl
 	// Most code here is identical to that found in controller.go of kube's PV controller...
 	claimClass := util.GetPersistentVolumeClaimClass(claim)
 	operation := fmt.Sprintf("provision %q class %q", claimToClaimKey(claim), claimClass)
-	klog.Info(logOperation(operation, "started"))
+	klog.V(4).Info(logOperation(operation, "started"))
 
 	//  A previous doProvisionClaim may just have finished while we were waiting for
 	//  the locks. Check that PV (with deterministic name) hasn't been provisioned
@@ -1365,7 +1365,7 @@ func (ctrl *ProvisionController) provisionClaimOperation(ctx context.Context, cl
 	_, exists, err := ctrl.volumes.GetByKey(pvName)
 	if err == nil && exists {
 		// Volume has been already provisioned, nothing to do.
-		klog.Info(logOperation(operation, "persistentvolume %q already exists, skipping", pvName))
+		klog.V(4).Info(logOperation(operation, "persistentvolume %q already exists, skipping", pvName))
 		return ProvisioningFinished, errStopProvision
 	}
 
@@ -1431,7 +1431,7 @@ func (ctrl *ProvisionController) provisionClaimOperation(ctx context.Context, cl
 	if err != nil {
 		if ierr, ok := err.(*IgnoredError); ok {
 			// Provision ignored, do nothing and hope another provisioner will provision it.
-			klog.Info(logOperation(operation, "volume provision ignored: %v", ierr))
+			klog.V(4).Info(logOperation(operation, "volume provision ignored: %v", ierr))
 			return ProvisioningFinished, errStopProvision
 		}
 
@@ -1439,7 +1439,7 @@ func (ctrl *ProvisionController) provisionClaimOperation(ctx context.Context, cl
 		return ctrl.provisionVolumeErrorHandling(ctx, result, err, claim, operation)
 	}
 
-	klog.Info(logOperation(operation, "volume %q provisioned", volume.Name))
+	klog.V(4).Info(logOperation(operation, "volume %q provisioned", volume.Name))
 
 	// Set ClaimRef and the PV controller will bind and set annBoundByController for us
 	volume.Spec.ClaimRef = claimRef
@@ -1452,7 +1452,7 @@ func (ctrl *ProvisionController) provisionClaimOperation(ctx context.Context, cl
 	metav1.SetMetaDataAnnotation(&volume.ObjectMeta, annDynamicallyProvisioned, class.Provisioner)
 	volume.Spec.StorageClassName = claimClass
 
-	klog.Info(logOperation(operation, "succeeded"))
+	klog.V(4).Info(logOperation(operation, "succeeded"))
 
 	if err := ctrl.volumeStore.StoreVolume(claim, volume); err != nil {
 		return ProvisioningFinished, err
@@ -1481,7 +1481,7 @@ func (ctrl *ProvisionController) provisionVolumeErrorHandling(ctx context.Contex
 			return ProvisioningFinished, err
 		}
 		// Label was removed, stop working on the volume.
-		klog.Info(logOperation(operation, "volume rescheduled because: %v", err))
+		klog.V(2).Info(logOperation(operation, "volume rescheduled because: %v", err))
 		return ProvisioningFinished, errStopProvision
 	}
 
@@ -1499,13 +1499,13 @@ func (ctrl *ProvisionController) provisionVolumeErrorHandling(ctx context.Contex
 // (requeue the volume) or not
 func (ctrl *ProvisionController) deleteVolumeOperation(ctx context.Context, volume *v1.PersistentVolume) error {
 	operation := fmt.Sprintf("delete %q", volume.Name)
-	klog.Info(logOperation(operation, "started"))
+	klog.V(4).Info(logOperation(operation, "started"))
 
 	err := ctrl.provisioner.Delete(ctx, volume)
 	if err != nil {
 		if ierr, ok := err.(*IgnoredError); ok {
 			// Delete ignored, do nothing and hope another provisioner will delete it.
-			klog.Info(logOperation(operation, "volume deletion ignored: %v", ierr))
+			klog.V(4).Info(logOperation(operation, "volume deletion ignored: %v", ierr))
 			return nil
 		}
 		// Delete failed, emit an event.
@@ -1514,7 +1514,7 @@ func (ctrl *ProvisionController) deleteVolumeOperation(ctx context.Context, volu
 		return err
 	}
 
-	klog.Info(logOperation(operation, "volume deleted"))
+	klog.V(4).Info(logOperation(operation, "volume deleted"))
 
 	// Delete the volume
 	if err = ctrl.client.CoreV1().PersistentVolumes().Delete(ctx, volume.Name, metav1.DeleteOptions{}); err != nil {
@@ -1559,7 +1559,7 @@ func (ctrl *ProvisionController) deleteVolumeOperation(ctx context.Context, volu
 		}
 	}
 
-	klog.Info(logOperation(operation, "persistentvolume deleted succeeded"))
+	klog.V(4).Info(logOperation(operation, "persistentvolume deleted succeeded"))
 	return nil
 }
 
