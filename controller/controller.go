@@ -1110,6 +1110,7 @@ func (ctrl *ProvisionController) syncVolume(ctx context.Context, obj interface{}
 	}
 
 	if ctrl.shouldDelete(ctx, volume) {
+		klog.V(5).Infof("shouldDelete Volume: %q", volume.Name)
 		startTime := time.Now()
 		err = ctrl.deleteVolumeOperation(ctx, volume)
 		ctrl.updateDeleteStats(volume, err, startTime)
@@ -1235,6 +1236,7 @@ func (ctrl *ProvisionController) shouldProvision(ctx context.Context, claim *v1.
 // shouldDelete returns whether a volume should have its backing volume
 // deleted, i.e. whether a Delete is "desired"
 func (ctrl *ProvisionController) shouldDelete(ctx context.Context, volume *v1.PersistentVolume) bool {
+	klog.V(5).Infof("shouldDelete volume %q", volume.Name)
 	if deletionGuard, ok := ctrl.provisioner.(DeletionGuard); ok {
 		if !deletionGuard.ShouldDelete(ctx, volume) {
 			return false
@@ -1244,22 +1246,27 @@ func (ctrl *ProvisionController) shouldDelete(ctx context.Context, volume *v1.Pe
 	if ctrl.addFinalizer {
 		if !ctrl.checkFinalizer(volume, finalizerPV) && volume.ObjectMeta.DeletionTimestamp != nil {
 			// The finalizer was removed, i.e. the volume has been already deleted.
+			klog.V(5).Infof("shouldDelete volume %q is false: finalizer already removed from volume", volume.Name)
 			return false
 		}
 	} else {
 		if volume.ObjectMeta.DeletionTimestamp != nil {
+			klog.V(5).Infof("shouldDelete volume %q is false: DeletionTimestamp != nil", volume.Name)
 			return false
 		}
 	}
 
 	if volume.Status.Phase != v1.VolumeReleased {
+		klog.V(5).Infof("shouldDelete volume %q is false: PersistentVolumePhase is not Released", volume.Name)
 		return false
 	}
 
 	if volume.Spec.PersistentVolumeReclaimPolicy != v1.PersistentVolumeReclaimDelete {
+		klog.V(5).Infof("shouldDelete volume %q is false: volume does not have Delete reclaim policy", volume.Name)
 		return false
 	}
 
+	klog.V(5).Infof("shouldDelete volume %q is true", volume.Name)
 	return true
 }
 
