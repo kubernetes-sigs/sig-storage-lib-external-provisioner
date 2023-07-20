@@ -1,3 +1,13 @@
+# Release notes for v9.0.3
+
+# Changelog since v9.0.2
+
+## Changes by Kind
+
+### Uncategorized
+
+- Added debug logs to shouldDelete function ([#146](https://github.com/kubernetes-sigs/sig-storage-lib-external-provisioner/pull/146), [@amacaskill](https://github.com/amacaskill))
+
 # Release notes for v9.0.2
 
 # Changelog since v9.0.1
