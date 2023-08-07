@@ -865,7 +865,7 @@ func (ctrl *ProvisionController) Run(ctx context.Context) {
 	go ctrl.volumeStore.Run(ctx, DefaultThreadiness)
 
 	if ctrl.leaderElection {
-		rl, err := resourcelock.New(resourcelock.EndpointsLeasesResourceLock,
+		rl, err := resourcelock.New(resourcelock.LeasesResourceLock,
 			ctrl.leaderElectionNamespace,
 			strings.Replace(ctrl.provisionerName, "/", "-", -1),
 			ctrl.client.CoreV1(),
