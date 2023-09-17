@@ -18,6 +18,7 @@ package util
 
 import (
 	"context"
+	"fmt"
 	"net"
 
 	"github.com/miekg/dns"
@@ -102,15 +103,16 @@ func CheckPersistentVolumeClaimModeBlock(pvc *v1.PersistentVolumeClaim) bool {
 
 // FindDNSIP looks up the cluster DNS service by label "coredns", falling back to "kube-dns" if not found
 func FindDNSIP(ctx context.Context, client kubernetes.Interface) (dnsip string) {
+	logger := klog.FromContext(ctx)
 	// find DNS server address through client API
 	// cache result in rbdProvisioner
 	var dnssvc *v1.Service
 	coredns, err := client.CoreV1().Services(metav1.NamespaceSystem).Get(ctx, "coredns", metav1.GetOptions{})
 	if err != nil {
-		klog.Warningf("error getting coredns service: %v. Falling back to kube-dns\n", err)
+		logger.Info("Error getting coredns service. Falling back to kube-dns", "err", err)
 		kubedns, err := client.CoreV1().Services(metav1.NamespaceSystem).Get(ctx, "kube-dns", metav1.GetOptions{})
 		if err != nil {
-			klog.Errorf("error getting kube-dns service: %v\n", err)
+			logger.Error(err, "Error getting kube-dns service")
 			return ""
 		}
 		dnssvc = kubedns
@@ -118,24 +120,25 @@ func FindDNSIP(ctx context.Context, client kubernetes.Interface) (dnsip string) 
 		dnssvc = coredns
 	}
 	if len(dnssvc.Spec.ClusterIP) == 0 {
-		klog.Errorf("DNS service ClusterIP bad\n")
+		logger.Error(nil, "DNS service ClusterIP bad\n")
 		return ""
 	}
 	return dnssvc.Spec.ClusterIP
 }
 
 // LookupHost looks up IP addresses of hostname on specified DNS server
-func LookupHost(hostname string, serverip string) (iplist []string, err error) {
-	klog.V(4).Infof("lookuphost %q on %q\n", hostname, serverip)
+func LookupHost(ctx context.Context, hostname string, serverip string) (iplist []string, err error) {
+	logger := klog.FromContext(ctx)
+	logger.V(4).Info("LookupHost", "hostname", hostname, "serverIP", serverip)
 	m := new(dns.Msg)
 	m.SetQuestion(dns.Fqdn(hostname), dns.TypeA)
 	in, err := dns.Exchange(m, JoinHostPort(serverip, "53"))
 	if err != nil {
-		klog.Errorf("dns lookup of %q failed: err %v", hostname, err)
+		logger.Error(err, "DNS lookup failed", "hostname", hostname)
 		return nil, err
 	}
 	for _, a := range in.Answer {
-		klog.V(4).Infof("lookuphost answer: %v\n", a)
+		logger.V(4).Info("LookupHost answer", "answer", fmt.Sprintf("%v", a))
 		if t, ok := a.(*dns.A); ok {
 			iplist = append(iplist, t.A.String())
 		}

@@ -66,14 +66,15 @@ func New(client kubernetes.Interface) Allocator {
 
 // AllocateNext allocates the next available GID for the given ProvisionOptions
 // (claim's options for a volume it wants) from the appropriate GID table.
-func (a *Allocator) AllocateNext(options controller.ProvisionOptions) (int, error) {
+func (a *Allocator) AllocateNext(ctx context.Context, options controller.ProvisionOptions) (int, error) {
 	class := util.GetPersistentVolumeClaimClass(options.PVC)
 	gidMin, gidMax, err := parseClassParameters(options.StorageClass.Parameters)
 	if err != nil {
 		return 0, err
 	}
 
-	gidTable, err := a.getGidTable(class, gidMin, gidMax)
+	logger := klog.FromContext(ctx)
+	gidTable, err := a.getGidTable(logger, class, gidMin, gidMax)
 	if err != nil {
 		return 0, fmt.Errorf("failed to get gidTable: %v", err)
 	}
@@ -88,18 +89,19 @@ func (a *Allocator) AllocateNext(options controller.ProvisionOptions) (int, erro
 
 // Release releases the given volume's allocated GID from the appropriate GID
 // table.
-func (a *Allocator) Release(volume *v1.PersistentVolume) error {
+func (a *Allocator) Release(ctx context.Context, volume *v1.PersistentVolume) error {
 	class, err := a.client.StorageV1().StorageClasses().Get(context.Background(), util.GetPersistentVolumeClass(volume), metav1.GetOptions{})
 	gidMin, gidMax, err := parseClassParameters(class.Parameters)
 	if err != nil {
 		return err
 	}
 
+	logger := klog.FromContext(ctx)
 	gid, exists, err := getGid(volume)
 	if err != nil {
-		klog.Error(err)
+		logger.Error(err, "Failed to get gid from volume")
 	} else if exists {
-		gidTable, err := a.getGidTable(class.Name, gidMin, gidMax)
+		gidTable, err := a.getGidTable(logger, class.Name, gidMin, gidMax)
 		if err != nil {
 			return fmt.Errorf("failed to get gidTable: %v", err)
 		}
@@ -117,7 +119,7 @@ func (a *Allocator) Release(volume *v1.PersistentVolume) error {
 //   - If this is the first time, fill it with all the gids
 //     used in PVs of this storage class by traversing the PVs.
 //   - Adapt the range of the table to the current range of the SC.
-func (a *Allocator) getGidTable(className string, min int, max int) (*allocator.MinMaxAllocator, error) {
+func (a *Allocator) getGidTable(logger klog.Logger, className string, min int, max int) (*allocator.MinMaxAllocator, error) {
 	var err error
 	a.gidTableLock.Lock()
 	gidTable, ok := a.gidTable[className]
@@ -139,7 +141,7 @@ func (a *Allocator) getGidTable(className string, min int, max int) (*allocator.
 	}
 
 	// collect gids with the full range
-	err = a.collectGids(className, newGidTable)
+	err = a.collectGids(logger, className, newGidTable)
 	if err != nil {
 		return nil, err
 	}
@@ -172,10 +174,10 @@ func (a *Allocator) getGidTable(className string, min int, max int) (*allocator.
 
 // Traverse the PVs, fetching all the GIDs from those
 // in a given storage class, and mark them in the table.
-func (a *Allocator) collectGids(className string, gidTable *allocator.MinMaxAllocator) error {
+func (a *Allocator) collectGids(logger klog.Logger, className string, gidTable *allocator.MinMaxAllocator) error {
 	pvList, err := a.client.CoreV1().PersistentVolumes().List(context.Background(), metav1.ListOptions{})
 	if err != nil {
-		klog.Errorf("failed to get existing persistent volumes")
+		logger.Error(err, "Failed to get existing persistent volumes")
 		return err
 	}
 
@@ -189,21 +191,21 @@ func (a *Allocator) collectGids(className string, gidTable *allocator.MinMaxAllo
 		gidStr, ok := pv.Annotations[VolumeGidAnnotationKey]
 
 		if !ok {
-			klog.Warningf("no gid found in pv '%v'", pvName)
+			logger.Info("No gid found", "pv", pvName)
 			continue
 		}
 
 		gid, err := convertGid(gidStr)
 		if err != nil {
-			klog.Error(err)
+			logger.Error(err, "Failed to convert gid", "pv", pvName)
 			continue
 		}
 
 		_, err = gidTable.Allocate(gid)
 		if err == allocator.ErrConflict {
-			klog.Warningf("gid %v found in pv %v was already allocated", gid, pvName)
+			logger.Info("gid was already allocated", "gid", gid, "pv", pvName)
 		} else if err != nil {
-			klog.Errorf("failed to store gid %v found in pv '%v': %v", gid, pvName, err)
+			logger.Error(err, "Failed to store gid", "gid", gid, "pv", pvName)
 			return err
 		}
 	}
