@@ -621,6 +621,8 @@ func NewProvisionController(
 	id = id + "_" + string(uuid.NewUUID())
 	component := provisionerName + "_" + id
 
+	// TODO: Once the following PR is merged, change to use StartLogging and StartRecordingToSinkWithContext
+	// https://github.com/kubernetes/kubernetes/pull/120729
 	v1.AddToScheme(scheme.Scheme)
 	broadcaster := record.NewBroadcaster()
 	broadcaster.StartStructuredLogging(0)
