@@ -2,3 +2,4 @@ vendor
 Gopkg.toml
 Gopkg.lock
 **/*.pyc
+hack/tools/bin
