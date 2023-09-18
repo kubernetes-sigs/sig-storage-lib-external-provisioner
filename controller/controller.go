@@ -821,7 +821,7 @@ func (ctrl *ProvisionController) forgetVolume(obj interface{}) {
 func (ctrl *ProvisionController) Run(ctx context.Context) {
 	run := func(ctx context.Context) {
 		logger := klog.FromContext(ctx)
-		logger.Info("Starting provisioner controller!", "component", ctrl.component)
+		logger.Info("Starting provisioner controller", "component", ctrl.component)
 		defer utilruntime.HandleCrash()
 		defer ctrl.claimQueue.ShutDown()
 		defer ctrl.volumeQueue.ShutDown()
@@ -870,7 +870,7 @@ func (ctrl *ProvisionController) Run(ctx context.Context) {
 			go wait.Until(func() { ctrl.runVolumeWorker(ctx) }, time.Second, ctx.Done())
 		}
 
-		logger.Info("Started provisioner controller!", "component", ctrl.component)
+		logger.Info("Started provisioner controller", "component", ctrl.component)
 
 		<-ctx.Done()
 	}
@@ -948,14 +948,14 @@ func (ctrl *ProvisionController) processNextClaimWorkItem(ctx context.Context) b
 
 		if err := ctrl.syncClaimHandler(ctx, key); err != nil {
 			if ctrl.failedProvisionThreshold == 0 {
-				logger.Info("Retrying syncing claim", "claim", key, "failures", ctrl.claimQueue.NumRequeues(obj))
+				logger.Info("Retrying syncing claim", "key", key, "failures", ctrl.claimQueue.NumRequeues(obj))
 				ctrl.claimQueue.AddRateLimited(obj)
 			} else if ctrl.claimQueue.NumRequeues(obj) < ctrl.failedProvisionThreshold {
-				logger.Info("Retrying syncing claim because failures < threshold", "claim", key, "failures", ctrl.claimQueue.NumRequeues(obj), "threshold", ctrl.failedProvisionThreshold)
+				logger.Info("Retrying syncing claim because failures < threshold", "key", key, "failures", ctrl.claimQueue.NumRequeues(obj), "threshold", ctrl.failedProvisionThreshold)
 				ctrl.claimQueue.AddRateLimited(obj)
 			} else {
-				logger.Error(nil, "Giving up syncing claim because failures >= threshold", "claim", key, "failures", ctrl.claimQueue.NumRequeues(obj), "threshold", ctrl.failedProvisionThreshold)
-				logger.V(2).Info("Removing PVC from claims in progress", "pvc", key)
+				logger.Error(nil, "Giving up syncing claim because failures >= threshold", "key", key, "failures", ctrl.claimQueue.NumRequeues(obj), "threshold", ctrl.failedProvisionThreshold)
+				logger.V(2).Info("Removing PVC from claims in progress", "key", key)
 				ctrl.claimsInProgress.Delete(key) // This can leak a volume that's being provisioned in the background!
 				// Done but do not Forget: it will not be in the queue but NumRequeues
 				// will be saved until the obj is deleted from kubernetes
@@ -1004,13 +1004,13 @@ func (ctrl *ProvisionController) processNextVolumeWorkItem(ctx context.Context) 
 
 		if err := ctrl.syncVolumeHandler(ctx, key); err != nil {
 			if ctrl.failedDeleteThreshold == 0 {
-				logger.Info("Retrying syncing volume", "volume", key, "failure", ctrl.volumeQueue.NumRequeues(obj))
+				logger.Info("Retrying syncing volume", "key", key, "failures", ctrl.volumeQueue.NumRequeues(obj))
 				ctrl.volumeQueue.AddRateLimited(obj)
 			} else if ctrl.volumeQueue.NumRequeues(obj) < ctrl.failedDeleteThreshold {
-				logger.Info("Retrying syncing volume because failures < threshold", "volume", key, "failure", ctrl.volumeQueue.NumRequeues(obj), "threshold", ctrl.failedDeleteThreshold)
+				logger.Info("Retrying syncing volume because failures < threshold", "key", key, "failures", ctrl.volumeQueue.NumRequeues(obj), "threshold", ctrl.failedDeleteThreshold)
 				ctrl.volumeQueue.AddRateLimited(obj)
 			} else {
-				logger.Info("Giving up syncing volume because failures >= threshold", "volume", key, "failure", ctrl.volumeQueue.NumRequeues(obj), "threshold", ctrl.failedDeleteThreshold)
+				logger.Info("Giving up syncing volume because failures >= threshold", "key", key, "failures", ctrl.volumeQueue.NumRequeues(obj), "threshold", ctrl.failedDeleteThreshold)
 				// Done but do not Forget: it will not be in the queue but NumRequeues
 				// will be saved until the obj is deleted from kubernetes
 			}
@@ -1129,7 +1129,7 @@ func (ctrl *ProvisionController) syncVolume(ctx context.Context, obj interface{}
 	}
 
 	if ctrl.shouldDelete(ctx, volume) {
-		klog.FromContext(ctx).V(5).Info("shouldDelete", "volume", volume.Name)
+		klog.FromContext(ctx).V(5).Info("shouldDelete", "PV", volume.Name)
 		startTime := time.Now()
 		err = ctrl.deleteVolumeOperation(ctx, volume)
 		ctrl.updateDeleteStats(volume, err, startTime)
@@ -1168,7 +1168,7 @@ func (ctrl *ProvisionController) isProvisionerForVolume(ctx context.Context, vol
 
 func (ctrl *ProvisionController) handleProtectionFinalizer(ctx context.Context, volume *v1.PersistentVolume) (*v1.PersistentVolume, error) {
 	var modified bool
-	klog.FromContext(ctx).V(4).Info("handleProtectionFinalizer", "volume", volume)
+	klog.FromContext(ctx).V(4).Info("handleProtectionFinalizer", "PV", volume)
 	reclaimPolicy := volume.Spec.PersistentVolumeReclaimPolicy
 	volumeFinalizers := volume.ObjectMeta.Finalizers
 
@@ -1255,7 +1255,7 @@ func (ctrl *ProvisionController) shouldProvision(ctx context.Context, claim *v1.
 // deleted, i.e. whether a Delete is "desired"
 func (ctrl *ProvisionController) shouldDelete(ctx context.Context, volume *v1.PersistentVolume) bool {
 	logger := klog.FromContext(ctx)
-	logger.V(5).Info("shouldDelete", "volume", volume.Name)
+	logger.V(5).Info("shouldDelete", "PV", volume.Name)
 	if deletionGuard, ok := ctrl.provisioner.(DeletionGuard); ok {
 		if !deletionGuard.ShouldDelete(ctx, volume) {
 			return false
@@ -1265,27 +1265,27 @@ func (ctrl *ProvisionController) shouldDelete(ctx context.Context, volume *v1.Pe
 	if ctrl.addFinalizer {
 		if !ctrl.checkFinalizer(volume, finalizerPV) && volume.ObjectMeta.DeletionTimestamp != nil {
 			// The finalizer was removed, i.e. the volume has been already deleted.
-			logger.V(5).Info("shouldDelete is false: finalizer already removed from volume", "volume", volume.Name)
+			logger.V(5).Info("shouldDelete is false: finalizer already removed from volume", "PV", volume.Name)
 			return false
 		}
 	} else {
 		if volume.ObjectMeta.DeletionTimestamp != nil {
-			logger.V(5).Info("shouldDelete is false: DeletionTimestamp != nil", "volume", volume.Name)
+			logger.V(5).Info("shouldDelete is false: DeletionTimestamp != nil", "PV", volume.Name)
 			return false
 		}
 	}
 
 	if volume.Status.Phase != v1.VolumeReleased {
-		logger.V(5).Info("shouldDelete is false: PersistentVolumePhase is not Released", "volume", volume.Name)
+		logger.V(5).Info("shouldDelete is false: PersistentVolumePhase is not Released", "PV", volume.Name)
 		return false
 	}
 
 	if volume.Spec.PersistentVolumeReclaimPolicy != v1.PersistentVolumeReclaimDelete {
-		logger.V(5).Info("shouldDelete is false: volume does not have Delete reclaim policy", "volume", volume.Name)
+		logger.V(5).Info("shouldDelete is false: volume does not have Delete reclaim policy", "PV", volume.Name)
 		return false
 	}
 
-	logger.V(5).Info("shouldDelete is true", "volume", volume.Name)
+	logger.V(5).Info("shouldDelete is true", "PV", volume.Name)
 	return true
 }
 
@@ -1385,7 +1385,7 @@ func (ctrl *ProvisionController) rescheduleProvisioning(ctx context.Context, cla
 		// here
 		// (https://github.com/kubernetes/client-go/blob/eb0bad8167df60e402297b26e2cee1bddffde108/tools/cache/store.go#L154-L162).
 		// Log the error and hope that a regular cache update will resolve it.
-		klog.FromContext(ctx).Info("Update claim informer cache for PersistentVolumeClaim", "pvc", klog.KObj(newClaim), "err", err)
+		klog.FromContext(ctx).Info("Update claim informer cache for PersistentVolumeClaim", "PVC", klog.KObj(newClaim), "err", err)
 	}
 
 	return nil
@@ -1398,7 +1398,7 @@ func (ctrl *ProvisionController) rescheduleProvisioning(ctx context.Context, cla
 func (ctrl *ProvisionController) provisionClaimOperation(ctx context.Context, claim *v1.PersistentVolumeClaim) (ProvisioningState, error) {
 	// Most code here is identical to that found in controller.go of kube's PV controller...
 	claimClass := util.GetPersistentVolumeClaimClass(claim)
-	logger := klog.FromContext(ctx).WithValues("pvc", klog.KObj(claim), "storageclass", claimClass)
+	logger := klog.FromContext(ctx).WithValues("PVC", klog.KObj(claim), "StorageClass", claimClass)
 	logger.Info("Started")
 
 	//  A previous doProvisionClaim may just have finished while we were waiting for
@@ -1408,7 +1408,7 @@ func (ctrl *ProvisionController) provisionClaimOperation(ctx context.Context, cl
 	_, exists, err := ctrl.volumes.GetByKey(pvName)
 	if err == nil && exists {
 		// Volume has been already provisioned, nothing to do.
-		logger.Info("PersistentVolume already exists, skipping", "pv", pvName)
+		logger.Info("PersistentVolume already exists, skipping", "PV", pvName)
 		return ProvisioningFinished, errStopProvision
 	}
 
@@ -1484,7 +1484,7 @@ func (ctrl *ProvisionController) provisionClaimOperation(ctx context.Context, cl
 		return ctrl.provisionVolumeErrorHandling(ctx2, result, err, claim)
 	}
 
-	logger.Info("Volume is provisioned", "volume", volume.Name)
+	logger.Info("Volume is provisioned", "PV", volume.Name)
 
 	// Set ClaimRef and the PV controller will bind and set annBoundByController for us
 	volume.Spec.ClaimRef = claimRef
@@ -1544,7 +1544,7 @@ func (ctrl *ProvisionController) provisionVolumeErrorHandling(ctx context.Contex
 // volume. Returns error, which indicates whether deletion should be retried
 // (requeue the volume) or not
 func (ctrl *ProvisionController) deleteVolumeOperation(ctx context.Context, volume *v1.PersistentVolume) error {
-	logger := klog.FromContext(ctx).WithValues("volume", volume.Name)
+	logger := klog.FromContext(ctx).WithValues("PV", volume.Name)
 	logger.Info("Started")
 
 	err := ctrl.provisioner.Delete(ctx, volume)
