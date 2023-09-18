@@ -12,10 +12,24 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-all: verify test
+GOBIN=$(shell pwd)/hack/tools/bin
+
+all: install-tools verify golangci-lint test
 
 dep:
 	go mod tidy
+	cd hack/tools && go mod tidy
+
+install-tools: $(GOBIN)
+	cd hack/tools \
+		&& GOBIN=$(GOBIN) go install github.com/golangci/golangci-lint/cmd/golangci-lint \
+		&& go build -o "${GOBIN}/logcheck.so" -buildmode=plugin sigs.k8s.io/logtools/logcheck/plugin
+
+$(GOBIN):
+	mkdir $@
+
+golangci-lint:
+	LOGCHECK_CONFIG="hack/logcheck.conf" "${GOBIN}/golangci-lint" run
 
 verify: dep
 	PATH=$$(go env GOPATH)/bin:$$PATH repo-infra/verify/verify-go-src.sh -v

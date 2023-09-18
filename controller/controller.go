@@ -1398,7 +1398,7 @@ func (ctrl *ProvisionController) rescheduleProvisioning(ctx context.Context, cla
 func (ctrl *ProvisionController) provisionClaimOperation(ctx context.Context, claim *v1.PersistentVolumeClaim) (ProvisioningState, error) {
 	// Most code here is identical to that found in controller.go of kube's PV controller...
 	claimClass := util.GetPersistentVolumeClaimClass(claim)
-	logger := klog.FromContext(ctx).WithValues("PVC", klog.KObj(claim), "StorageClass", claimClass)
+	logger := klog.LoggerWithValues(klog.FromContext(ctx), "PVC", klog.KObj(claim), "StorageClass", claimClass)
 	logger.Info("Started")
 
 	//  A previous doProvisionClaim may just have finished while we were waiting for
@@ -1544,7 +1544,7 @@ func (ctrl *ProvisionController) provisionVolumeErrorHandling(ctx context.Contex
 // volume. Returns error, which indicates whether deletion should be retried
 // (requeue the volume) or not
 func (ctrl *ProvisionController) deleteVolumeOperation(ctx context.Context, volume *v1.PersistentVolume) error {
-	logger := klog.FromContext(ctx).WithValues("PV", volume.Name)
+	logger := klog.LoggerWithValues(klog.FromContext(ctx), "PV", volume.Name)
 	logger.Info("Started")
 
 	err := ctrl.provisioner.Delete(ctx, volume)
