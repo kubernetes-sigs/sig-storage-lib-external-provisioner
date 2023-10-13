@@ -859,7 +859,7 @@ func (ctrl *ProvisionController) Run(ctx context.Context) {
 
 		klog.Infof("Started provisioner controller %s!", ctrl.component)
 
-		select {}
+		<-ctx.Done()
 	}
 
 	go ctrl.volumeStore.Run(ctx, DefaultThreadiness)
