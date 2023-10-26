@@ -1570,34 +1570,35 @@ func (ctrl *ProvisionController) deleteVolumeOperation(ctx context.Context, volu
 	return nil
 }
 
+// removeFinalizer removes finalizer from slice, returns slice and whether modified.
 func removeFinalizer(finalizers []string, finalizerToRemove string) ([]string, bool) {
-	modified := false
-	modifiedFinalizers := make([]string, 0)
-	for _, finalizer := range finalizers {
-		if finalizer != finalizerToRemove {
-			modifiedFinalizers = append(modifiedFinalizers, finalizer)
+	for i, finalizer := range finalizers {
+		if finalizer == finalizerToRemove {
+			finalizers = append(finalizers[:i], finalizers[i+1:]...)
+			if len(finalizers) == 0 {
+				finalizers = nil
+			}
+			return finalizers, true
 		}
 	}
-	if len(modifiedFinalizers) == 0 {
-		modifiedFinalizers = nil
+
+	if len(finalizers) == 0 {
+		finalizers = nil
 	}
-	if len(modifiedFinalizers) != len(finalizers) {
-		modified = true
-	}
-	return modifiedFinalizers, modified
+
+	return finalizers, false
 }
 
+// addFinalizer adds finalizer to slice, returns slice and whether modified.
 func addFinalizer(finalizers []string, finalizerToAdd string) ([]string, bool) {
-	modifiedFinalizers := make([]string, 0)
 	for _, finalizer := range finalizers {
 		if finalizer == finalizerToAdd {
 			// finalizer already exists
 			return finalizers, false
 		}
 	}
-	modifiedFinalizers = append(modifiedFinalizers, finalizers...)
-	modifiedFinalizers = append(modifiedFinalizers, finalizerToAdd)
-	return modifiedFinalizers, true
+
+	return append(finalizers, finalizerToAdd), true
 }
 
 func logOperation(operation, format string, a ...interface{}) string {
