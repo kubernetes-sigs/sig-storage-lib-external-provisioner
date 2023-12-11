@@ -84,6 +84,9 @@ const finalizerPV = "external-provisioner.volume.kubernetes.io/finalizer"
 
 const uidIndex = "uid"
 
+// ControllerSubsystem is prometheus subsystem name.
+const controllerSubsystem = "controller"
+
 var (
 	errStopProvision = errors.New("stop provisioning")
 )
@@ -636,7 +639,7 @@ func NewProvisionController(
 		leaseDuration:             DefaultLeaseDuration,
 		renewDeadline:             DefaultRenewDeadline,
 		retryPeriod:               DefaultRetryPeriod,
-		metrics:                   metrics.M,
+		metrics:                   metrics.New(controllerSubsystem),
 		metricsPort:               DefaultMetricsPort,
 		metricsAddress:            DefaultMetricsAddress,
 		metricsPath:               DefaultMetricsPath,

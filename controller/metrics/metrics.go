@@ -20,11 +20,6 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 )
 
-const (
-	// ControllerSubsystem is prometheus subsystem name.
-	ControllerSubsystem = "controller"
-)
-
 // Metrics contains the metrics for a certain subsystem name.
 type Metrics struct {
 	// PersistentVolumeClaimProvisionTotal is used to collect accumulated count of persistent volumes provisioned.
@@ -40,9 +35,6 @@ type Metrics struct {
 	// PersistentVolumeDeleteDurationSeconds is used to collect latency in seconds to delete persistent volumes.
 	PersistentVolumeDeleteDurationSeconds *prometheus.HistogramVec
 }
-
-// M contains the metrics with ControllerSubsystem as subsystem name.
-var M = New(ControllerSubsystem)
 
 // New creates a new set of metrics with the goven subsystem name.
 func New(subsystem string) Metrics {
