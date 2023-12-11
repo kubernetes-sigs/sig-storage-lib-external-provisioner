@@ -818,12 +818,12 @@ func (ctrl *ProvisionController) Run(ctx context.Context) {
 		ctrl.hasRunLock.Unlock()
 		if ctrl.metricsPort > 0 {
 			prometheus.MustRegister([]prometheus.Collector{
-				metrics.PersistentVolumeClaimProvisionTotal,
-				metrics.PersistentVolumeClaimProvisionFailedTotal,
-				metrics.PersistentVolumeClaimProvisionDurationSeconds,
-				metrics.PersistentVolumeDeleteTotal,
-				metrics.PersistentVolumeDeleteFailedTotal,
-				metrics.PersistentVolumeDeleteDurationSeconds,
+				ctrl.metrics.PersistentVolumeClaimProvisionTotal,
+				ctrl.metrics.PersistentVolumeClaimProvisionFailedTotal,
+				ctrl.metrics.PersistentVolumeClaimProvisionDurationSeconds,
+				ctrl.metrics.PersistentVolumeDeleteTotal,
+				ctrl.metrics.PersistentVolumeDeleteFailedTotal,
+				ctrl.metrics.PersistentVolumeDeleteDurationSeconds,
 			}...)
 			http.Handle(ctrl.metricsPath, promhttp.Handler())
 			address := net.JoinHostPort(ctrl.metricsAddress, strconv.FormatInt(int64(ctrl.metricsPort), 10))
