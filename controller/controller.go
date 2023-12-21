@@ -52,8 +52,8 @@ import (
 	ref "k8s.io/client-go/tools/reference"
 	"k8s.io/client-go/util/workqueue"
 	"k8s.io/klog/v2"
-	"sigs.k8s.io/sig-storage-lib-external-provisioner/v9/controller/metrics"
-	"sigs.k8s.io/sig-storage-lib-external-provisioner/v9/util"
+	"sigs.k8s.io/sig-storage-lib-external-provisioner/v10/controller/metrics"
+	"sigs.k8s.io/sig-storage-lib-external-provisioner/v10/util"
 )
 
 // This annotation is added to a PV that has been dynamically provisioned by
@@ -83,6 +83,9 @@ const annAlphaSelectedNode = "volume.alpha.kubernetes.io/selected-node"
 const finalizerPV = "external-provisioner.volume.kubernetes.io/finalizer"
 
 const uidIndex = "uid"
+
+// ControllerSubsystem is prometheus subsystem name.
+const controllerSubsystem = "controller"
 
 var (
 	errStopProvision = errors.New("stop provisioning")
@@ -636,7 +639,7 @@ func NewProvisionController(
 		leaseDuration:             DefaultLeaseDuration,
 		renewDeadline:             DefaultRenewDeadline,
 		retryPeriod:               DefaultRetryPeriod,
-		metrics:                   metrics.M,
+		metrics:                   metrics.New(controllerSubsystem),
 		metricsPort:               DefaultMetricsPort,
 		metricsAddress:            DefaultMetricsAddress,
 		metricsPath:               DefaultMetricsPath,
@@ -818,12 +821,12 @@ func (ctrl *ProvisionController) Run(ctx context.Context) {
 		ctrl.hasRunLock.Unlock()
 		if ctrl.metricsPort > 0 {
 			prometheus.MustRegister([]prometheus.Collector{
-				metrics.PersistentVolumeClaimProvisionTotal,
-				metrics.PersistentVolumeClaimProvisionFailedTotal,
-				metrics.PersistentVolumeClaimProvisionDurationSeconds,
-				metrics.PersistentVolumeDeleteTotal,
-				metrics.PersistentVolumeDeleteFailedTotal,
-				metrics.PersistentVolumeDeleteDurationSeconds,
+				ctrl.metrics.PersistentVolumeClaimProvisionTotal,
+				ctrl.metrics.PersistentVolumeClaimProvisionFailedTotal,
+				ctrl.metrics.PersistentVolumeClaimProvisionDurationSeconds,
+				ctrl.metrics.PersistentVolumeDeleteTotal,
+				ctrl.metrics.PersistentVolumeDeleteFailedTotal,
+				ctrl.metrics.PersistentVolumeDeleteDurationSeconds,
 			}...)
 			http.Handle(ctrl.metricsPath, promhttp.Handler())
 			address := net.JoinHostPort(ctrl.metricsAddress, strconv.FormatInt(int64(ctrl.metricsPort), 10))
