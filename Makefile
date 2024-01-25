@@ -12,24 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-GOBIN=$(shell pwd)/hack/tools/bin
-
-all: install-tools verify golangci-lint test
+all: verify test logcheck
 
 dep:
 	go mod tidy
-	cd hack/tools && go mod tidy
-
-install-tools: $(GOBIN)
-	cd hack/tools \
-		&& GOBIN=$(GOBIN) go install github.com/golangci/golangci-lint/cmd/golangci-lint \
-		&& go build -o "${GOBIN}/logcheck.so" -buildmode=plugin sigs.k8s.io/logtools/logcheck/plugin
-
-$(GOBIN):
-	mkdir $@
-
-golangci-lint:
-	LOGCHECK_CONFIG="hack/logcheck.conf" "${GOBIN}/golangci-lint" run
 
 verify: dep
 	PATH=$$(go env GOPATH)/bin:$$PATH repo-infra/verify/verify-go-src.sh -v
@@ -38,6 +24,10 @@ verify: dep
 test: dep
 	go test ./controller -v
 	go test ./allocator -v
+
+logcheck:
+	go install sigs.k8s.io/logtools/logcheck@v0.7.0
+	PATH=$$(go env GOPATH)/bin:$$PATH logcheck -check-contextual ./...
 
 clean:
 	rm -rf ./test/e2e/kubernetes
