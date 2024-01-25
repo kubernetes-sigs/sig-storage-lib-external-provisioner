@@ -66,14 +66,13 @@ func New(client kubernetes.Interface) Allocator {
 
 // AllocateNext allocates the next available GID for the given ProvisionOptions
 // (claim's options for a volume it wants) from the appropriate GID table.
-func (a *Allocator) AllocateNext(ctx context.Context, options controller.ProvisionOptions) (int, error) {
+func (a *Allocator) AllocateNext(logger klog.Logger, options controller.ProvisionOptions) (int, error) {
 	class := util.GetPersistentVolumeClaimClass(options.PVC)
 	gidMin, gidMax, err := parseClassParameters(options.StorageClass.Parameters)
 	if err != nil {
 		return 0, err
 	}
 
-	logger := klog.FromContext(ctx)
 	gidTable, err := a.getGidTable(logger, class, gidMin, gidMax)
 	if err != nil {
 		return 0, fmt.Errorf("failed to get gidTable: %v", err)
@@ -89,14 +88,13 @@ func (a *Allocator) AllocateNext(ctx context.Context, options controller.Provisi
 
 // Release releases the given volume's allocated GID from the appropriate GID
 // table.
-func (a *Allocator) Release(ctx context.Context, volume *v1.PersistentVolume) error {
+func (a *Allocator) Release(logger klog.Logger, volume *v1.PersistentVolume) error {
 	class, err := a.client.StorageV1().StorageClasses().Get(context.Background(), util.GetPersistentVolumeClass(volume), metav1.GetOptions{})
 	gidMin, gidMax, err := parseClassParameters(class.Parameters)
 	if err != nil {
 		return err
 	}
 
-	logger := klog.FromContext(ctx)
 	gid, exists, err := getGid(volume)
 	if err != nil {
 		logger.Error(err, "Failed to get gid from volume")
