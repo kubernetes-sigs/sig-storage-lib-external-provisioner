@@ -1499,7 +1499,7 @@ func (ctrl *ProvisionController) provisionClaimOperation(ctx context.Context, cl
 
 	logger.Info("Succeeded")
 
-	if err := ctrl.volumeStore.StoreVolume(ctx, claim, volume); err != nil {
+	if err := ctrl.volumeStore.StoreVolume(logger, claim, volume); err != nil {
 		return ProvisioningFinished, err
 	}
 	if err = ctrl.volumes.Add(volume); err != nil {

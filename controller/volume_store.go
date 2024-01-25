@@ -47,7 +47,7 @@ type VolumeStore interface {
 	// is being saved in background.
 	// In error is returned, no PV was saved and corresponding PVC needs
 	// to be re-queued (so whole provisioning needs to be done again).
-	StoreVolume(ctx context.Context, claim *v1.PersistentVolumeClaim, volume *v1.PersistentVolume) error
+	StoreVolume(logger klog.Logger, claim *v1.PersistentVolumeClaim, volume *v1.PersistentVolume) error
 
 	// Runs any background goroutines for implementation of the interface.
 	Run(ctx context.Context, threadiness int)
@@ -83,11 +83,11 @@ func NewVolumeStoreQueue(
 	}
 }
 
-func (q *queueStore) StoreVolume(ctx context.Context, _ *v1.PersistentVolumeClaim, volume *v1.PersistentVolume) error {
-	if err := q.doSaveVolume(ctx, volume); err != nil {
+func (q *queueStore) StoreVolume(logger klog.Logger, _ *v1.PersistentVolumeClaim, volume *v1.PersistentVolume) error {
+	if err := q.doSaveVolume(logger, volume); err != nil {
 		q.volumes.Store(volume.Name, volume)
 		q.queue.Add(volume.Name)
-		klog.FromContext(ctx).Error(err, "Failed to save volume", "volume", volume.Name)
+		logger.Error(err, "Failed to save volume", "volume", volume.Name)
 	}
 	// Consume any error, this Store will retry in background.
 	return nil
@@ -140,10 +140,11 @@ func (q *queueStore) processNextWorkItem(ctx context.Context) bool {
 		return true
 	}
 
-	if err := q.doSaveVolume(ctx, volume); err != nil {
+	logger := klog.FromContext(ctx)
+	if err := q.doSaveVolume(logger, volume); err != nil {
 		q.queue.AddRateLimited(volumeName)
 		utilruntime.HandleError(err)
-		klog.FromContext(ctx).V(5).Info("Volume enqueued", "volume", volume.Name)
+		logger.V(5).Info("Volume enqueued", "volume", volume.Name)
 		return true
 	}
 	q.volumes.Delete(volumeName)
@@ -151,22 +152,21 @@ func (q *queueStore) processNextWorkItem(ctx context.Context) bool {
 	return true
 }
 
-func (q *queueStore) doSaveVolume(ctx context.Context, volume *v1.PersistentVolume) error {
-	logger := klog.FromContext(ctx)
+func (q *queueStore) doSaveVolume(logger klog.Logger, volume *v1.PersistentVolume) error {
 	logger.V(5).Info("Saving volume", "volume", volume.Name)
 	_, err := q.client.CoreV1().PersistentVolumes().Create(context.Background(), volume, metav1.CreateOptions{})
 	if err == nil || apierrs.IsAlreadyExists(err) {
 		logger.V(5).Info("Volume saved", "volume", volume.Name)
-		q.sendSuccessEvent(ctx, volume)
+		q.sendSuccessEvent(logger, volume)
 		return nil
 	}
 	return fmt.Errorf("error saving volume %s: %s", volume.Name, err)
 }
 
-func (q *queueStore) sendSuccessEvent(ctx context.Context, volume *v1.PersistentVolume) {
+func (q *queueStore) sendSuccessEvent(logger klog.Logger, volume *v1.PersistentVolume) {
 	claimObjs, err := q.claimsIndexer.ByIndex(uidIndex, string(volume.Spec.ClaimRef.UID))
 	if err != nil {
-		klog.FromContext(ctx).V(2).Info("Error sending event to claim", "claimUID", volume.Spec.ClaimRef.UID, "err", err)
+		logger.V(2).Info("Error sending event to claim", "claimUID", volume.Spec.ClaimRef.UID, "err", err)
 		return
 	}
 	if len(claimObjs) != 1 {
@@ -207,9 +207,8 @@ func NewBackoffStore(client kubernetes.Interface,
 	}
 }
 
-func (b *backoffStore) StoreVolume(ctx context.Context, claim *v1.PersistentVolumeClaim, volume *v1.PersistentVolume) error {
+func (b *backoffStore) StoreVolume(logger klog.Logger, claim *v1.PersistentVolumeClaim, volume *v1.PersistentVolume) error {
 	// Try to create the PV object several times
-	logger := klog.FromContext(ctx)
 	var lastSaveError error
 	err := wait.ExponentialBackoff(*b.backoff, func() (bool, error) {
 		logger.Info("Trying to save persistentvolume", "persistentvolume", volume.Name)
