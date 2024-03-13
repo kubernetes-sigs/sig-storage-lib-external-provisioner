@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/ioutil"
@@ -37,7 +38,9 @@ import (
 	storagebeta "k8s.io/api/storage/v1beta1"
 	apierrs "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	"k8s.io/apimachinery/pkg/util/strategicpatch"
 	"k8s.io/apimachinery/pkg/util/uuid"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/informers"
@@ -1169,8 +1172,7 @@ func (ctrl *ProvisionController) handleProtectionFinalizer(ctx context.Context, 
 	}
 
 	if modified {
-		volume.ObjectMeta.Finalizers = volumeFinalizers
-		newVolume, err := ctrl.updatePersistentVolume(ctx, volume)
+		newVolume, err := ctrl.patchPersistentVolumeWithFinalizers(ctx, volume, volumeFinalizers)
 		if err != nil {
 			return volume, fmt.Errorf("failed to modify finalizers to %+v on volume %s err: %+v", volumeFinalizers, volume.Name, err)
 		}
@@ -1319,12 +1321,29 @@ func (ctrl *ProvisionController) updateDeleteStats(volume *v1.PersistentVolume, 
 	}
 }
 
-func (ctrl *ProvisionController) updatePersistentVolume(ctx context.Context, volume *v1.PersistentVolume) (*v1.PersistentVolume, error) {
-	newVolume, err := ctrl.client.CoreV1().PersistentVolumes().Update(ctx, volume, metav1.UpdateOptions{})
+// patchPersistentVolumeWithFinalizers patches the PersistentVolume with the given finalizers
+func (ctrl *ProvisionController) patchPersistentVolumeWithFinalizers(ctx context.Context, volume *v1.PersistentVolume, finalizers []string) (*v1.PersistentVolume, error) {
+	oldData, err := json.Marshal(volume)
 	if err != nil {
-		return volume, err
+		return nil, err
 	}
-	return newVolume, nil
+
+	volumeCopy := volume.DeepCopy()
+	volumeCopy.ObjectMeta.Finalizers = finalizers
+	newData, err := json.Marshal(volumeCopy)
+	if err != nil {
+		return nil, err
+	}
+
+	patchBytes, err := strategicpatch.CreateTwoWayMergePatch(oldData, newData, &v1.PersistentVolume{})
+	if err != nil {
+		return nil, err
+	}
+	pv, err := ctrl.client.CoreV1().PersistentVolumes().Patch(ctx, volume.Name, types.StrategicMergePatchType, patchBytes, metav1.PatchOptions{})
+	if err != nil {
+		return nil, err
+	}
+	return pv, nil
 }
 
 // rescheduleProvisioning signal back to the scheduler to retry dynamic provisioning
@@ -1556,8 +1575,7 @@ func (ctrl *ProvisionController) deleteVolumeOperation(ctx context.Context, volu
 
 			// Only update the finalizers if we actually removed something
 			if modified {
-				newVolume.ObjectMeta.Finalizers = finalizers
-				if _, err = ctrl.client.CoreV1().PersistentVolumes().Update(ctx, newVolume, metav1.UpdateOptions{}); err != nil {
+				if _, err = ctrl.patchPersistentVolumeWithFinalizers(ctx, newVolume, finalizers); err != nil {
 					if !apierrs.IsNotFound(err) {
 						// Couldn't remove finalizer and the object still exists, the controller may
 						// try to remove the finalizer again on the next update
