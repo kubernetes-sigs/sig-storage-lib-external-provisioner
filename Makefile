@@ -25,8 +25,8 @@ verify: dep
 	PATH=$$(go env GOPATH)/bin:$$PATH repo-infra/verify/verify-boilerplate.sh
 
 test: dep
-	go test ./controller
-	go test ./allocator
+	go test ./controller -v
+	go test ./allocator -v
 
 clean:
 	rm -rf ./test/e2e/kubernetes
