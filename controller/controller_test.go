@@ -924,7 +924,7 @@ func TestTopologyParams(t *testing.T) {
 			name: "provision with selected node",
 			objs: []runtime.Object{
 				newNode("node-1"),
-				newStorageClass("class-1", "foo.bar/baz"),
+				newStorageClassWithVolumeBindingMode("class-1", "foo.bar/baz", &modeWait),
 				newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", map[string]string{annSelectedNode: "node-1"}),
 			},
 			expectedParams: &provisionParams{
@@ -935,7 +935,11 @@ func TestTopologyParams(t *testing.T) {
 			name: "provision with AllowedTopologies and selected node",
 			objs: []runtime.Object{
 				newNode("node-1"),
-				newStorageClassWithAllowedTopologies("class-1", "foo.bar/baz", dummyAllowedTopology),
+				func() *storage.StorageClass {
+					sc := newStorageClassWithVolumeBindingMode("class-1", "foo.bar/baz", &modeWait)
+					sc.AllowedTopologies = dummyAllowedTopology
+					return sc
+				}(),
 				newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", map[string]string{annSelectedNode: "node-1"}),
 			},
 			expectedParams: &provisionParams{
@@ -946,7 +950,7 @@ func TestTopologyParams(t *testing.T) {
 		{
 			name: "provision with selected node, but node does not exist",
 			objs: []runtime.Object{
-				newStorageClass("class-1", "foo.bar/baz"),
+				newStorageClassWithVolumeBindingMode("class-1", "foo.bar/baz", &modeWait),
 				newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", map[string]string{annSelectedNode: "node-1"}),
 			},
 			expectedParams: nil,
