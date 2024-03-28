@@ -47,10 +47,10 @@ type hostPathProvisioner struct {
 }
 
 // NewHostPathProvisioner creates a new hostpath provisioner
-func NewHostPathProvisioner() controller.Provisioner {
+func NewHostPathProvisioner(ctx context.Context) controller.Provisioner {
 	nodeName := os.Getenv("NODE_NAME")
 	if nodeName == "" {
-		klog.Fatal("env variable NODE_NAME must be set so that this provisioner can identify itself")
+		klog.FromContext(ctx).Error(nil, "env variable NODE_NAME must be set so that this provisioner can identify itself")
 	}
 	return &hostPathProvisioner{
 		pvDir:    "/tmp/hostpath-provisioner",
@@ -117,24 +117,27 @@ func main() {
 	flag.Parse()
 	flag.Set("logtostderr", "true")
 
+	ctx := context.Background()
+	logger := klog.FromContext(ctx)
+
 	// Create an InClusterConfig and use it to create a client for the controller
 	// to use to communicate with Kubernetes
 	config, err := rest.InClusterConfig()
 	if err != nil {
-		klog.Fatalf("Failed to create config: %v", err)
+		logger.Error(err, "Failed to create config")
 	}
 	clientset, err := kubernetes.NewForConfig(config)
 	if err != nil {
-		klog.Fatalf("Failed to create client: %v", err)
+		logger.Error(err, "Failed to create client")
 	}
 
 	// Create the provisioner: it implements the Provisioner interface expected by
 	// the controller
-	hostPathProvisioner := NewHostPathProvisioner()
+	hostPathProvisioner := NewHostPathProvisioner(ctx)
 
 	// Start the provision controller which will dynamically provision hostPath
 	// PVs
-	pc := controller.NewProvisionController(clientset, provisionerName, hostPathProvisioner)
+	pc := controller.NewProvisionController(logger, clientset, provisionerName, hostPathProvisioner)
 
 	// Never stops.
 	pc.Run(context.Background())

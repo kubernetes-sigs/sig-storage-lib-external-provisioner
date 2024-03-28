@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-all: verify test
+all: verify test logcheck
 
 dep:
 	go mod tidy
@@ -27,6 +27,10 @@ verify: dep
 test: dep
 	go test ./controller -v
 	go test ./allocator -v
+
+logcheck:
+	go install sigs.k8s.io/logtools/logcheck@v0.7.0
+	PATH=$$(go env GOPATH)/bin:$$PATH logcheck -check-contextual ./...
 
 clean:
 	rm -rf ./test/e2e/kubernetes
