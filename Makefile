@@ -25,9 +25,10 @@ test: dep
 	go test ./controller -v
 	go test ./allocator -v
 
+# Check contextual logging.
+.PHONY: logcheck
 logcheck:
-	go install sigs.k8s.io/logtools/logcheck@v0.7.0
-	PATH=$$(go env GOPATH)/bin:$$PATH logcheck -check-contextual ./...
+	hack/verify-logcheck.sh
 
 clean:
 	rm -rf ./test/e2e/kubernetes
