@@ -52,5 +52,5 @@ class TestBoilerplate(unittest.TestCase):
 
     sys.stdout = old_stdout
 
-    self.assertEquals(
+    self.assertEqual(
         output, ['././fail.go', '././fail.py'])
