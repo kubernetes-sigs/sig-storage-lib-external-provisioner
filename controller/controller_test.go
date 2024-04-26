@@ -44,6 +44,8 @@ import (
 	ref "k8s.io/client-go/tools/reference"
 	"k8s.io/client-go/util/workqueue"
 	klog "k8s.io/klog/v2"
+	"k8s.io/klog/v2/ktesting"
+	_ "k8s.io/klog/v2/ktesting/init"
 	"sigs.k8s.io/sig-storage-lib-external-provisioner/v10/controller/metrics"
 )
 
@@ -52,10 +54,6 @@ const (
 	sharedResyncPeriod   = 1 * time.Second
 	defaultServerVersion = "v1.5.0"
 )
-
-func init() {
-	klog.InitFlags(nil)
-}
 
 var (
 	modeWait = storage.VolumeBindingWaitForFirstConsumer
@@ -95,7 +93,7 @@ func TestController(t *testing.T) {
 			provisionerName: "foo.bar/baz",
 			provisioner:     newTestProvisioner(),
 			expectedVolumes: []v1.PersistentVolume{
-				*newProvisionedVolume(newStorageClass("class-1", "foo.bar/baz"), newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil), nil),
+				*newProvisionedVolume(contextFromKtesting(t), newStorageClass("class-1", "foo.bar/baz"), newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil), nil),
 			},
 			expectedMetrics: testMetrics{
 				provisioned: counts{
@@ -108,12 +106,12 @@ func TestController(t *testing.T) {
 			objs: []runtime.Object{
 				newStorageClass("class-1", "foo.bar/baz"),
 				newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil),
-				newProvisionedVolume(newStorageClass("class-1", "foo.bar/baz"), newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil), nil),
+				newProvisionedVolume(contextFromKtesting(t), newStorageClass("class-1", "foo.bar/baz"), newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil), nil),
 			},
 			provisionerName: "foo.bar/baz",
 			provisioner:     newTestProvisioner(),
 			expectedVolumes: []v1.PersistentVolume{
-				*newProvisionedVolume(newStorageClass("class-1", "foo.bar/baz"), newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil), nil),
+				*newProvisionedVolume(contextFromKtesting(t), newStorageClass("class-1", "foo.bar/baz"), newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil), nil),
 			},
 			expectedMetrics: testMetrics{
 				provisioned: counts{
@@ -145,7 +143,7 @@ func TestController(t *testing.T) {
 			additionalProvisionerNames: []string{"foo.bar/baz", "foo.xyz/baz"},
 			provisioner:                newTestProvisioner(),
 			expectedVolumes: []v1.PersistentVolume{
-				*newProvisionedVolume(newStorageClass("class-1", "foo.bar/baz"), newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil), nil),
+				*newProvisionedVolume(contextFromKtesting(t), newStorageClass("class-1", "foo.bar/baz"), newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil), nil),
 			},
 			expectedMetrics: testMetrics{
 				provisioned: counts{
@@ -292,7 +290,7 @@ func TestController(t *testing.T) {
 				newClaim("claim-2", "uid-1-1", "class-1", "foo.bar/baz", "", nil),
 			},
 			provisionerName: "foo.bar/baz",
-			provisioner:     newIgnoredProvisioner(),
+			provisioner:     newIgnoredProvisioner(contextFromKtesting(t)),
 			expectedMetrics: testMetrics{
 				provisioned: counts{
 					"class-1": count{failed: 1},
@@ -307,9 +305,9 @@ func TestController(t *testing.T) {
 				newClaim("claim-2", "uid-1-2", "class-1", "foo.bar/baz", "", nil),
 			},
 			provisionerName: "foo.bar/baz",
-			provisioner:     newIgnoredProvisioner(),
+			provisioner:     newIgnoredProvisioner(contextFromKtesting(t)),
 			expectedVolumes: []v1.PersistentVolume{
-				*newProvisionedVolume(newStorageClass("class-1", "foo.bar/baz"), newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil), nil),
+				*newProvisionedVolume(contextFromKtesting(t), newStorageClass("class-1", "foo.bar/baz"), newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil), nil),
 			},
 			expectedMetrics: testMetrics{
 				provisioned: counts{
@@ -326,7 +324,7 @@ func TestController(t *testing.T) {
 			provisionerName: "foo.bar/baz",
 			provisioner:     newTestProvisioner(),
 			expectedVolumes: []v1.PersistentVolume{
-				*newProvisionedVolumeWithReclaimPolicy(newStorageClassWithReclaimPolicy("class-1", "foo.bar/baz", v1.PersistentVolumeReclaimRetain), newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil), nil),
+				*newProvisionedVolumeWithReclaimPolicy(contextFromKtesting(t), newStorageClassWithReclaimPolicy("class-1", "foo.bar/baz", v1.PersistentVolumeReclaimRetain), newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil), nil),
 			},
 			expectedMetrics: testMetrics{
 				provisioned: counts{
@@ -343,7 +341,7 @@ func TestController(t *testing.T) {
 			provisionerName: "foo.bar/baz",
 			provisioner:     newProvisioner(t, "pvc-uid-1-1", ProvisioningFinished, nil),
 			expectedVolumes: []v1.PersistentVolume{
-				*newProvisionedVolume(newStorageClass("class-1", "foo.bar/baz"), newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil), nil),
+				*newProvisionedVolume(contextFromKtesting(t), newStorageClass("class-1", "foo.bar/baz"), newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil), nil),
 			},
 			expectedMetrics: testMetrics{
 				provisioned: counts{
@@ -463,7 +461,7 @@ func TestController(t *testing.T) {
 			provisioner:              newProvisioner(t, "pvc-uid-1-1", ProvisioningFinished, nil),
 			expectedClaimsInProgress: []string{},
 			expectedVolumes: []v1.PersistentVolume{
-				*newProvisionedVolume(newStorageClass("class-1", "foo.bar/baz"), newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil), nil),
+				*newProvisionedVolume(contextFromKtesting(t), newStorageClass("class-1", "foo.bar/baz"), newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil), nil),
 			},
 			expectedMetrics: testMetrics{
 				provisioned: counts{
@@ -486,7 +484,7 @@ func TestController(t *testing.T) {
 			expectedVolumes:  []v1.PersistentVolume(nil),
 			volumeQueueStore: true,
 			expectedStoredVolumes: []*v1.PersistentVolume{
-				newProvisionedVolume(newStorageClass("class-1", "foo.bar/baz"), newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil), nil),
+				newProvisionedVolume(contextFromKtesting(t), newStorageClass("class-1", "foo.bar/baz"), newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil), nil),
 			},
 			expectedMetrics: testMetrics{
 				provisioned: counts{
@@ -511,7 +509,7 @@ func TestController(t *testing.T) {
 				return false, nil, nil
 			},
 			expectedVolumes: []v1.PersistentVolume{
-				*newProvisionedVolume(newStorageClass("class-1", "foo.bar/baz"), newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil), nil),
+				*newProvisionedVolume(contextFromKtesting(t), newStorageClass("class-1", "foo.bar/baz"), newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil), nil),
 			},
 			volumeQueueStore:      true,
 			expectedStoredVolumes: []*v1.PersistentVolume{},
@@ -641,7 +639,7 @@ func TestController(t *testing.T) {
 			provisionerName: "foo.bar/baz",
 			provisioner:     newProvisioner(t, "pvc-uid-1-1", ProvisioningFinished, nil),
 			expectedVolumes: []v1.PersistentVolume{
-				*newProvisionedVolume(newStorageClass("class-1", "foo.bar/baz"), newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil), []string{finalizerPV}),
+				*newProvisionedVolume(contextFromKtesting(t), newStorageClass("class-1", "foo.bar/baz"), newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil), []string{finalizerPV}),
 			},
 			expectedMetrics: testMetrics{
 				provisioned: counts{
@@ -804,10 +802,11 @@ func TestController(t *testing.T) {
 			if test.addFinalizer {
 				provisionerOptions = append(provisionerOptions, AddFinalizer(true))
 			}
+			logger, _ := ktesting.NewTestContext(t)
 			if test.additionalProvisionerNames == nil {
-				ctrl = newTestProvisionController(client, test.provisionerName, test.provisioner, provisionerOptions...)
+				ctrl = newTestProvisionController(logger, client, test.provisionerName, test.provisioner, provisionerOptions...)
 			} else {
-				ctrl = newTestProvisionControllerWithAdditionalNames(client, test.provisionerName, test.provisioner, test.additionalProvisionerNames, provisionerOptions...)
+				ctrl = newTestProvisionControllerWithAdditionalNames(logger, client, test.provisionerName, test.provisioner, test.additionalProvisionerNames, provisionerOptions...)
 			}
 			for _, claim := range test.claimsInProgress {
 				ctrl.claimsInProgress.Store(string(claim.UID), claim)
@@ -958,9 +957,10 @@ func TestTopologyParams(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
+			logger, _ := ktesting.NewTestContext(t)
 			client := fake.NewSimpleClientset(test.objs...)
 			provisioner := newTestProvisioner()
-			ctrl := newTestProvisionController(client, "foo.bar/baz" /* provisionerName */, provisioner)
+			ctrl := newTestProvisionController(logger, client, "foo.bar/baz" /* provisionerName */, provisioner)
 			// Run forever...
 			go ctrl.Run(context.Background())
 
@@ -1114,11 +1114,12 @@ func TestShouldProvision(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			client := fake.NewSimpleClientset(test.claim)
 
+			logger, _ := ktesting.NewTestContext(t)
 			var ctrl testProvisionController
 			if test.additionalProvisionerNames == nil {
-				ctrl = newTestProvisionController(client, test.provisionerName, test.provisioner)
+				ctrl = newTestProvisionController(logger, client, test.provisionerName, test.provisioner)
 			} else {
-				ctrl = newTestProvisionControllerWithAdditionalNames(client, test.provisionerName, test.provisioner, test.additionalProvisionerNames)
+				ctrl = newTestProvisionControllerWithAdditionalNames(logger, client, test.provisionerName, test.provisioner, test.additionalProvisionerNames)
 			}
 
 			if test.class != nil {
@@ -1194,9 +1195,10 @@ func TestShouldDelete(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
+			logger, _ := ktesting.NewTestContext(t)
 			client := fake.NewSimpleClientset()
 			provisioner := newTestProvisioner()
-			ctrl := newTestProvisionController(client, test.provisionerName, provisioner)
+			ctrl := newTestProvisionController(logger, client, test.provisionerName, provisioner)
 			test.volume.ObjectMeta.DeletionTimestamp = test.deletionTimestamp
 
 			should := ctrl.shouldDelete(context.Background(), test.volume)
@@ -1283,9 +1285,10 @@ func TestIsProvisionerForVolume(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
+			logger, _ := ktesting.NewTestContext(t)
 			client := fake.NewSimpleClientset()
 			provisioner := newTestProvisioner()
-			ctrl := newTestProvisionController(client, test.provisionerName, provisioner)
+			ctrl := newTestProvisionController(logger, client, test.provisionerName, provisioner)
 			should := ctrl.isProvisionerForVolume(context.Background(), test.volume)
 			if test.expectedShould != should {
 				t.Errorf("expected should delete %v but got %v\n", test.expectedShould, should)
@@ -1340,11 +1343,12 @@ func TestShouldDeleteWithFinalizer(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
+			logger, _ := ktesting.NewTestContext(t)
 			client := fake.NewSimpleClientset()
 			provisioner := newTestProvisioner()
 			provisionerOptions := make([]func(*ProvisionController) error, 0)
 			provisionerOptions = append(provisionerOptions, AddFinalizer(true))
-			ctrl := newTestProvisionController(client, test.provisionerName, provisioner, provisionerOptions...)
+			ctrl := newTestProvisionController(logger, client, test.provisionerName, provisioner, provisionerOptions...)
 			test.volume.ObjectMeta.DeletionTimestamp = test.deletionTimestamp
 
 			should := ctrl.shouldDelete(context.Background(), test.volume)
@@ -1535,8 +1539,9 @@ func TestCanProvision(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
+			logger, _ := ktesting.NewTestContext(t)
 			client := fake.NewSimpleClientset(test.claim)
-			ctrl := newTestProvisionController(client, provisionerName, test.provisioner)
+			ctrl := newTestProvisionController(logger, client, provisionerName, test.provisioner)
 
 			can := ctrl.canProvision(context.Background(), test.claim)
 			if !reflect.DeepEqual(test.expectedCan, can) {
@@ -1561,7 +1566,7 @@ func TestControllerSharedInformers(t *testing.T) {
 			},
 			provisionerName: "foo.bar/baz",
 			expectedVolumes: []v1.PersistentVolume{
-				*newProvisionedVolumeWithReclaimPolicy(newStorageClassWithReclaimPolicy("class-1", "foo.bar/baz", v1.PersistentVolumeReclaimDelete), newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil), nil),
+				*newProvisionedVolumeWithReclaimPolicy(contextFromKtesting(t), newStorageClassWithReclaimPolicy("class-1", "foo.bar/baz", v1.PersistentVolumeReclaimDelete), newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil), nil),
 			},
 		},
 		{
@@ -1576,9 +1581,10 @@ func TestControllerSharedInformers(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
+			logger, _ := ktesting.NewTestContext(t)
 			client := fake.NewSimpleClientset(test.objs...)
 
-			ctrl, informersFactory := newTestProvisionControllerSharedInformers(client, test.provisionerName,
+			ctrl, informersFactory := newTestProvisionControllerSharedInformers(logger, client, test.provisionerName,
 				newTestProvisioner(), sharedResyncPeriod)
 			stopCh := make(chan struct{})
 			defer close(stopCh)
@@ -1659,6 +1665,7 @@ func getCounts(t *testing.T, vec *prometheus.CounterVec, cts *counts, success bo
 }
 
 func newTestProvisionController(
+	logger klog.Logger,
 	client kubernetes.Interface,
 	provisionerName string,
 	provisioner Provisioner,
@@ -1677,6 +1684,7 @@ func newTestProvisionController(
 		provisionerOptions = append(provisionerOptions, options...)
 	}
 	ctrl := NewProvisionController(
+		logger,
 		client,
 		provisionerName,
 		provisioner,
@@ -1688,6 +1696,7 @@ func newTestProvisionController(
 }
 
 func newTestProvisionControllerWithAdditionalNames(
+	logger klog.Logger,
 	client kubernetes.Interface,
 	provisionerName string,
 	provisioner Provisioner,
@@ -1708,6 +1717,7 @@ func newTestProvisionControllerWithAdditionalNames(
 		provisionerOptions = append(provisionerOptions, options...)
 	}
 	ctrl := NewProvisionController(
+		logger,
 		client,
 		provisionerName,
 		provisioner,
@@ -1719,6 +1729,7 @@ func newTestProvisionControllerWithAdditionalNames(
 }
 
 func newTestProvisionControllerSharedInformers(
+	klog klog.Logger,
 	client kubernetes.Interface,
 	provisionerName string,
 	provisioner Provisioner,
@@ -1733,6 +1744,7 @@ func newTestProvisionControllerSharedInformers(
 	}()
 
 	ctrl := NewProvisionController(
+		klog,
 		client,
 		provisionerName,
 		provisioner,
@@ -1905,8 +1917,8 @@ func newCSIVolume(name string, phase v1.PersistentVolumePhase, policy v1.Persist
 
 // newProvisionedVolume returns the volume the test controller should provision
 // for the given claim with the given class.
-func newProvisionedVolume(storageClass *storage.StorageClass, claim *v1.PersistentVolumeClaim, pvFinalizers []string) *v1.PersistentVolume {
-	volume := constructProvisionedVolumeWithoutStorageClassInfo(claim, v1.PersistentVolumeReclaimDelete)
+func newProvisionedVolume(ctx context.Context, storageClass *storage.StorageClass, claim *v1.PersistentVolumeClaim, pvFinalizers []string) *v1.PersistentVolume {
+	volume := constructProvisionedVolumeWithoutStorageClassInfo(ctx, claim, v1.PersistentVolumeReclaimDelete)
 
 	// pv.Annotations["pv.kubernetes.io/provisioned-by"] MUST be set to name of the external provisioner. This provisioner will be used to delete the volume.
 	volume.Annotations = map[string]string{annDynamicallyProvisioned: storageClass.Provisioner}
@@ -1916,8 +1928,8 @@ func newProvisionedVolume(storageClass *storage.StorageClass, claim *v1.Persiste
 	return volume
 }
 
-func newProvisionedVolumeWithReclaimPolicy(storageClass *storage.StorageClass, claim *v1.PersistentVolumeClaim, pvFinalizers []string) *v1.PersistentVolume {
-	volume := constructProvisionedVolumeWithoutStorageClassInfo(claim, *storageClass.ReclaimPolicy)
+func newProvisionedVolumeWithReclaimPolicy(ctx context.Context, storageClass *storage.StorageClass, claim *v1.PersistentVolumeClaim, pvFinalizers []string) *v1.PersistentVolume {
+	volume := constructProvisionedVolumeWithoutStorageClassInfo(ctx, claim, *storageClass.ReclaimPolicy)
 
 	// pv.Annotations["pv.kubernetes.io/provisioned-by"] MUST be set to name of the external provisioner. This provisioner will be used to delete the volume.
 	volume.Annotations = map[string]string{annDynamicallyProvisioned: storageClass.Provisioner}
@@ -1927,7 +1939,7 @@ func newProvisionedVolumeWithReclaimPolicy(storageClass *storage.StorageClass, c
 	return volume
 }
 
-func constructProvisionedVolumeWithoutStorageClassInfo(claim *v1.PersistentVolumeClaim, reclaimPolicy v1.PersistentVolumeReclaimPolicy) *v1.PersistentVolume {
+func constructProvisionedVolumeWithoutStorageClassInfo(ctx context.Context, claim *v1.PersistentVolumeClaim, reclaimPolicy v1.PersistentVolumeReclaimPolicy) *v1.PersistentVolume {
 	// pv.Spec MUST be set to match requirements in claim.Spec, especially access mode and PV size. The provisioned volume size MUST NOT be smaller than size requested in the claim, however it MAY be larger.
 	options := ProvisionOptions{
 		StorageClass: &storage.StorageClass{
@@ -1936,7 +1948,7 @@ func constructProvisionedVolumeWithoutStorageClassInfo(claim *v1.PersistentVolum
 		PVName: "pvc-" + string(claim.ObjectMeta.UID),
 		PVC:    claim,
 	}
-	volume, _, _ := newTestProvisioner().Provision(context.Background(), options)
+	volume, _, _ := newTestProvisioner().Provision(ctx, options)
 
 	// pv.Spec.ClaimRef MUST point to the claim that led to its creation (including the claim UID).
 	v1.AddToScheme(scheme.Scheme)
@@ -2105,11 +2117,12 @@ func (p *noChangeTestProvisioner) Provision(ctx context.Context, options Provisi
 	return nil, ProvisioningNoChange, errors.New("fake error, no change")
 }
 
-func newIgnoredProvisioner() Provisioner {
-	return &ignoredProvisioner{}
+func newIgnoredProvisioner(ctx context.Context) Provisioner {
+	return &ignoredProvisioner{ctx: ctx}
 }
 
 type ignoredProvisioner struct {
+	ctx context.Context
 }
 
 var _ Provisioner = &ignoredProvisioner{}
@@ -2119,7 +2132,7 @@ func (i *ignoredProvisioner) Provision(ctx context.Context, options ProvisionOpt
 		return nil, ProvisioningFinished, &IgnoredError{"Ignored"}
 	}
 
-	return newProvisionedVolume(newStorageClass("class-1", "foo.bar/baz"), newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil), nil), ProvisioningFinished, nil
+	return newProvisionedVolume(i.ctx, newStorageClass("class-1", "foo.bar/baz"), newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", nil), nil), ProvisioningFinished, nil
 }
 
 func (i *ignoredProvisioner) Delete(ctx context.Context, volume *v1.PersistentVolume) error {
@@ -2154,7 +2167,7 @@ func (m *provisioner) Provision(ctx context.Context, options ProvisionOptions) (
 		m.t.Errorf("Invalid psrovision call, expected name %q, got %q", m.pvName, options.PVName)
 		return nil, ProvisioningFinished, fmt.Errorf("Invalid provision call, expected name %q, got %q", m.pvName, options.PVName)
 	}
-	klog.Infof("Provision() call")
+	klog.FromContext(ctx).Info("Provision() call")
 
 	if m.returnError == nil {
 		pv := &v1.PersistentVolume{
@@ -2180,4 +2193,9 @@ func (m *provisioner) Provision(ctx context.Context, options ProvisionOptions) (
 
 	}
 	return nil, m.returnStatus, m.returnError
+}
+
+func contextFromKtesting(t *testing.T) context.Context {
+	_, ctx := ktesting.NewTestContext(t)
+	return ctx
 }

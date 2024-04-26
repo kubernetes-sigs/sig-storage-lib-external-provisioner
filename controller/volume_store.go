@@ -47,7 +47,7 @@ type VolumeStore interface {
 	// is being saved in background.
 	// In error is returned, no PV was saved and corresponding PVC needs
 	// to be re-queued (so whole provisioning needs to be done again).
-	StoreVolume(claim *v1.PersistentVolumeClaim, volume *v1.PersistentVolume) error
+	StoreVolume(logger klog.Logger, claim *v1.PersistentVolumeClaim, volume *v1.PersistentVolume) error
 
 	// Runs any background goroutines for implementation of the interface.
 	Run(ctx context.Context, threadiness int)
@@ -83,33 +83,34 @@ func NewVolumeStoreQueue(
 	}
 }
 
-func (q *queueStore) StoreVolume(_ *v1.PersistentVolumeClaim, volume *v1.PersistentVolume) error {
-	if err := q.doSaveVolume(volume); err != nil {
+func (q *queueStore) StoreVolume(logger klog.Logger, _ *v1.PersistentVolumeClaim, volume *v1.PersistentVolume) error {
+	if err := q.doSaveVolume(logger, volume); err != nil {
 		q.volumes.Store(volume.Name, volume)
 		q.queue.Add(volume.Name)
-		klog.Errorf("Failed to save volume %s: %s", volume.Name, err)
+		logger.Error(err, "Failed to save volume", "volume", volume.Name)
 	}
 	// Consume any error, this Store will retry in background.
 	return nil
 }
 
 func (q *queueStore) Run(ctx context.Context, threadiness int) {
-	klog.Infof("Starting save volume queue")
+	logger := klog.FromContext(ctx)
+	logger.Info("Starting save volume queue")
 	defer q.queue.ShutDown()
 
 	for i := 0; i < threadiness; i++ {
-		go wait.Until(q.saveVolumeWorker, time.Second, ctx.Done())
+		go wait.UntilWithContext(ctx, q.saveVolumeWorker, time.Second)
 	}
 	<-ctx.Done()
-	klog.Infof("Stopped save volume queue")
+	logger.Info("Stopped save volume queue")
 }
 
-func (q *queueStore) saveVolumeWorker() {
-	for q.processNextWorkItem() {
+func (q *queueStore) saveVolumeWorker(ctx context.Context) {
+	for q.processNextWorkItem(ctx) {
 	}
 }
 
-func (q *queueStore) processNextWorkItem() bool {
+func (q *queueStore) processNextWorkItem(ctx context.Context) bool {
 	obj, shutdown := q.queue.Get()
 	defer q.queue.Done(obj)
 
@@ -139,10 +140,11 @@ func (q *queueStore) processNextWorkItem() bool {
 		return true
 	}
 
-	if err := q.doSaveVolume(volume); err != nil {
+	logger := klog.FromContext(ctx)
+	if err := q.doSaveVolume(logger, volume); err != nil {
 		q.queue.AddRateLimited(volumeName)
 		utilruntime.HandleError(err)
-		klog.V(5).Infof("Volume %s enqueued", volume.Name)
+		logger.V(5).Info("Volume enqueued", "volume", volume.Name)
 		return true
 	}
 	q.volumes.Delete(volumeName)
@@ -150,21 +152,21 @@ func (q *queueStore) processNextWorkItem() bool {
 	return true
 }
 
-func (q *queueStore) doSaveVolume(volume *v1.PersistentVolume) error {
-	klog.V(5).Infof("Saving volume %s", volume.Name)
+func (q *queueStore) doSaveVolume(logger klog.Logger, volume *v1.PersistentVolume) error {
+	logger.V(5).Info("Saving volume", "volume", volume.Name)
 	_, err := q.client.CoreV1().PersistentVolumes().Create(context.Background(), volume, metav1.CreateOptions{})
 	if err == nil || apierrs.IsAlreadyExists(err) {
-		klog.V(5).Infof("Volume %s saved", volume.Name)
-		q.sendSuccessEvent(volume)
+		logger.V(5).Info("Volume saved", "volume", volume.Name)
+		q.sendSuccessEvent(logger, volume)
 		return nil
 	}
 	return fmt.Errorf("error saving volume %s: %s", volume.Name, err)
 }
 
-func (q *queueStore) sendSuccessEvent(volume *v1.PersistentVolume) {
+func (q *queueStore) sendSuccessEvent(logger klog.Logger, volume *v1.PersistentVolume) {
 	claimObjs, err := q.claimsIndexer.ByIndex(uidIndex, string(volume.Spec.ClaimRef.UID))
 	if err != nil {
-		klog.V(2).Infof("Error sending event to claim %s: %s", volume.Spec.ClaimRef.UID, err)
+		logger.V(2).Info("Error sending event to claim", "claimUID", volume.Spec.ClaimRef.UID, "err", err)
 		return
 	}
 	if len(claimObjs) != 1 {
@@ -205,23 +207,23 @@ func NewBackoffStore(client kubernetes.Interface,
 	}
 }
 
-func (b *backoffStore) StoreVolume(claim *v1.PersistentVolumeClaim, volume *v1.PersistentVolume) error {
+func (b *backoffStore) StoreVolume(logger klog.Logger, claim *v1.PersistentVolumeClaim, volume *v1.PersistentVolume) error {
 	// Try to create the PV object several times
 	var lastSaveError error
 	err := wait.ExponentialBackoff(*b.backoff, func() (bool, error) {
-		klog.Infof("Trying to save persistentvolume %q", volume.Name)
+		logger.Info("Trying to save persistentvolume", "persistentvolume", volume.Name)
 		var err error
 		if _, err = b.client.CoreV1().PersistentVolumes().Create(context.Background(), volume, metav1.CreateOptions{}); err == nil || apierrs.IsAlreadyExists(err) {
 			// Save succeeded.
 			if err != nil {
-				klog.Infof("persistentvolume %q already exists, reusing", volume.Name)
+				logger.Info("Persistentvolume already exists, reusing", "persistentvolume", volume.Name)
 			} else {
-				klog.Infof("persistentvolume %q saved", volume.Name)
+				logger.Info("Persistentvolume saved", "persistentvolume", volume.Name)
 			}
 			return true, nil
 		}
 		// Save failed, try again after a while.
-		klog.Infof("Failed to save persistentvolume %q: %v", volume.Name, err)
+		logger.Info("Failed to save persistentvolume", "persistentvolume", volume.Name, "err", err)
 		lastSaveError = err
 		return false, nil
 	})
@@ -237,27 +239,27 @@ func (b *backoffStore) StoreVolume(claim *v1.PersistentVolumeClaim, volume *v1.P
 	// but we don't have appropriate PV object for it.
 	// Emit some event here and try to delete the storage asset several
 	// times.
-	strerr := fmt.Sprintf("Error creating provisioned PV object for claim %s: %v. Deleting the volume.", claimToClaimKey(claim), lastSaveError)
-	klog.Error(strerr)
+	logger.Error(lastSaveError, "Error creating provisioned PV object for claim. Deleting the volume.", "claim", klog.KObj(claim))
+	strerr := fmt.Sprintf("Error creating provisioned PV object for claim %s: %v. Deleting the volume.", klog.KObj(claim), lastSaveError)
 	b.eventRecorder.Event(claim, v1.EventTypeWarning, "ProvisioningFailed", strerr)
 
 	var lastDeleteError error
 	err = wait.ExponentialBackoff(*b.backoff, func() (bool, error) {
 		if err = b.ctrl.provisioner.Delete(context.Background(), volume); err == nil {
 			// Delete succeeded
-			klog.Infof("Cleaning volume %q succeeded", volume.Name)
+			logger.Info("Cleaning volume succeeded", "volume", volume.Name)
 			return true, nil
 		}
 		// Delete failed, try again after a while.
-		klog.Infof("Failed to clean volume %q: %v", volume.Name, err)
+		logger.Info("Failed to clean volume", "volume", volume.Name, "err", err)
 		lastDeleteError = err
 		return false, nil
 	})
 	if err != nil {
 		// Delete failed several times. There is an orphaned volume and there
 		// is nothing we can do about it.
-		strerr := fmt.Sprintf("Error cleaning provisioned volume for claim %s: %v. Please delete manually.", claimToClaimKey(claim), lastDeleteError)
-		klog.Error(strerr)
+		logger.Error(lastSaveError, "Error cleaning provisioned volume for claim. Please delete manually.", "claim", klog.KObj(claim))
+		strerr := fmt.Sprintf("Error cleaning provisioned volume for claim %s: %v. Please delete manually.", klog.KObj(claim), lastDeleteError)
 		b.eventRecorder.Event(claim, v1.EventTypeWarning, "ProvisioningCleanupFailed", strerr)
 	}
 

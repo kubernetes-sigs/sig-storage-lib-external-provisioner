@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-all: verify test
+all: verify test logcheck
 
 dep:
 	go mod tidy
@@ -24,6 +24,11 @@ verify: dep
 test: dep
 	go test ./controller -v
 	go test ./allocator -v
+
+# Check contextual logging.
+.PHONY: logcheck
+logcheck:
+	hack/verify-logcheck.sh
 
 clean:
 	rm -rf ./test/e2e/kubernetes
