@@ -211,14 +211,14 @@ func (b *backoffStore) StoreVolume(logger klog.Logger, claim *v1.PersistentVolum
 	// Try to create the PV object several times
 	var lastSaveError error
 	err := wait.ExponentialBackoff(*b.backoff, func() (bool, error) {
-		logger.Info("Trying to save persistentvolume", "persistentvolume", volume.Name)
+		logger.V(4).Info("Trying to save persistentvolume", "persistentvolume", volume.Name)
 		var err error
 		if _, err = b.client.CoreV1().PersistentVolumes().Create(context.Background(), volume, metav1.CreateOptions{}); err == nil || apierrs.IsAlreadyExists(err) {
 			// Save succeeded.
 			if err != nil {
-				logger.Info("Persistentvolume already exists, reusing", "persistentvolume", volume.Name)
+				logger.V(2).Info("Persistentvolume already exists, reusing", "persistentvolume", volume.Name)
 			} else {
-				logger.Info("Persistentvolume saved", "persistentvolume", volume.Name)
+				logger.V(4).Info("Persistentvolume saved", "persistentvolume", volume.Name)
 			}
 			return true, nil
 		}
@@ -247,7 +247,7 @@ func (b *backoffStore) StoreVolume(logger klog.Logger, claim *v1.PersistentVolum
 	err = wait.ExponentialBackoff(*b.backoff, func() (bool, error) {
 		if err = b.ctrl.provisioner.Delete(context.Background(), volume); err == nil {
 			// Delete succeeded
-			logger.Info("Cleaning volume succeeded", "volume", volume.Name)
+			logger.V(4).Info("Cleaning volume succeeded", "volume", volume.Name)
 			return true, nil
 		}
 		// Delete failed, try again after a while.
