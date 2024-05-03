@@ -21,7 +21,7 @@ set -o errexit
 set -o nounset
 set -o pipefail
 
-LOGCHECK_VERSION=${1:-0.8.1}
+LOGCHECK_VERSION=${1:-0.8.2}
 
 # This will canonicalize the path
 SIG_STORAGE_LIB_EXTERNAL_PROVISIONER_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")"/.. && pwd -P)
@@ -34,4 +34,4 @@ trap 'rm -rf "${SIG_STORAGE_LIB_EXTERNAL_PROVISIONER_TEMP}"' EXIT
 echo "Installing logcheck to temp dir: sigs.k8s.io/logtools/logcheck@v${LOGCHECK_VERSION}"
 GOBIN="${SIG_STORAGE_LIB_EXTERNAL_PROVISIONER_TEMP}" go install "sigs.k8s.io/logtools/logcheck@v${LOGCHECK_VERSION}"
 echo "Verifing logcheck: ${SIG_STORAGE_LIB_EXTERNAL_PROVISIONER_TEMP}/logcheck -check-contextual ${SIG_STORAGE_LIB_EXTERNAL_PROVISIONER_ROOT}/..."
-"${SIG_STORAGE_LIB_EXTERNAL_PROVISIONER_TEMP}/logcheck" -check-contextual "${SIG_STORAGE_LIB_EXTERNAL_PROVISIONER_ROOT}/..."
+"${SIG_STORAGE_LIB_EXTERNAL_PROVISIONER_TEMP}/logcheck" -check-contextual -check-with-helpers "${SIG_STORAGE_LIB_EXTERNAL_PROVISIONER_ROOT}/..."

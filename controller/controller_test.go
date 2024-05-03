@@ -802,11 +802,11 @@ func TestController(t *testing.T) {
 			if test.addFinalizer {
 				provisionerOptions = append(provisionerOptions, AddFinalizer(true))
 			}
-			logger, _ := ktesting.NewTestContext(t)
+			_, ctx := ktesting.NewTestContext(t)
 			if test.additionalProvisionerNames == nil {
-				ctrl = newTestProvisionController(logger, client, test.provisionerName, test.provisioner, provisionerOptions...)
+				ctrl = newTestProvisionController(ctx, client, test.provisionerName, test.provisioner, provisionerOptions...)
 			} else {
-				ctrl = newTestProvisionControllerWithAdditionalNames(logger, client, test.provisionerName, test.provisioner, test.additionalProvisionerNames, provisionerOptions...)
+				ctrl = newTestProvisionControllerWithAdditionalNames(ctx, client, test.provisionerName, test.provisioner, test.additionalProvisionerNames, provisionerOptions...)
 			}
 			for _, claim := range test.claimsInProgress {
 				ctrl.claimsInProgress.Store(string(claim.UID), claim)
@@ -957,10 +957,10 @@ func TestTopologyParams(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			logger, _ := ktesting.NewTestContext(t)
+			_, ctx := ktesting.NewTestContext(t)
 			client := fake.NewSimpleClientset(test.objs...)
 			provisioner := newTestProvisioner()
-			ctrl := newTestProvisionController(logger, client, "foo.bar/baz" /* provisionerName */, provisioner)
+			ctrl := newTestProvisionController(ctx, client, "foo.bar/baz" /* provisionerName */, provisioner)
 			// Run forever...
 			go ctrl.Run(context.Background())
 
@@ -1114,12 +1114,12 @@ func TestShouldProvision(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			client := fake.NewSimpleClientset(test.claim)
 
-			logger, _ := ktesting.NewTestContext(t)
+			_, ctx := ktesting.NewTestContext(t)
 			var ctrl testProvisionController
 			if test.additionalProvisionerNames == nil {
-				ctrl = newTestProvisionController(logger, client, test.provisionerName, test.provisioner)
+				ctrl = newTestProvisionController(ctx, client, test.provisionerName, test.provisioner)
 			} else {
-				ctrl = newTestProvisionControllerWithAdditionalNames(logger, client, test.provisionerName, test.provisioner, test.additionalProvisionerNames)
+				ctrl = newTestProvisionControllerWithAdditionalNames(ctx, client, test.provisionerName, test.provisioner, test.additionalProvisionerNames)
 			}
 
 			if test.class != nil {
@@ -1195,10 +1195,10 @@ func TestShouldDelete(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			logger, _ := ktesting.NewTestContext(t)
+			_, ctx := ktesting.NewTestContext(t)
 			client := fake.NewSimpleClientset()
 			provisioner := newTestProvisioner()
-			ctrl := newTestProvisionController(logger, client, test.provisionerName, provisioner)
+			ctrl := newTestProvisionController(ctx, client, test.provisionerName, provisioner)
 			test.volume.ObjectMeta.DeletionTimestamp = test.deletionTimestamp
 
 			should := ctrl.shouldDelete(context.Background(), test.volume)
@@ -1285,10 +1285,10 @@ func TestIsProvisionerForVolume(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			logger, _ := ktesting.NewTestContext(t)
+			_, ctx := ktesting.NewTestContext(t)
 			client := fake.NewSimpleClientset()
 			provisioner := newTestProvisioner()
-			ctrl := newTestProvisionController(logger, client, test.provisionerName, provisioner)
+			ctrl := newTestProvisionController(ctx, client, test.provisionerName, provisioner)
 			should := ctrl.isProvisionerForVolume(context.Background(), test.volume)
 			if test.expectedShould != should {
 				t.Errorf("expected should delete %v but got %v\n", test.expectedShould, should)
@@ -1343,12 +1343,12 @@ func TestShouldDeleteWithFinalizer(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			logger, _ := ktesting.NewTestContext(t)
+			_, ctx := ktesting.NewTestContext(t)
 			client := fake.NewSimpleClientset()
 			provisioner := newTestProvisioner()
 			provisionerOptions := make([]func(*ProvisionController) error, 0)
 			provisionerOptions = append(provisionerOptions, AddFinalizer(true))
-			ctrl := newTestProvisionController(logger, client, test.provisionerName, provisioner, provisionerOptions...)
+			ctrl := newTestProvisionController(ctx, client, test.provisionerName, provisioner, provisionerOptions...)
 			test.volume.ObjectMeta.DeletionTimestamp = test.deletionTimestamp
 
 			should := ctrl.shouldDelete(context.Background(), test.volume)
@@ -1539,9 +1539,9 @@ func TestCanProvision(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			logger, _ := ktesting.NewTestContext(t)
+			_, ctx := ktesting.NewTestContext(t)
 			client := fake.NewSimpleClientset(test.claim)
-			ctrl := newTestProvisionController(logger, client, provisionerName, test.provisioner)
+			ctrl := newTestProvisionController(ctx, client, provisionerName, test.provisioner)
 
 			can := ctrl.canProvision(context.Background(), test.claim)
 			if !reflect.DeepEqual(test.expectedCan, can) {
@@ -1581,10 +1581,10 @@ func TestControllerSharedInformers(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			logger, _ := ktesting.NewTestContext(t)
+			_, ctx := ktesting.NewTestContext(t)
 			client := fake.NewSimpleClientset(test.objs...)
 
-			ctrl, informersFactory := newTestProvisionControllerSharedInformers(logger, client, test.provisionerName,
+			ctrl, informersFactory := newTestProvisionControllerSharedInformers(ctx, client, test.provisionerName,
 				newTestProvisioner(), sharedResyncPeriod)
 			stopCh := make(chan struct{})
 			defer close(stopCh)
@@ -1665,7 +1665,7 @@ func getCounts(t *testing.T, vec *prometheus.CounterVec, cts *counts, success bo
 }
 
 func newTestProvisionController(
-	logger klog.Logger,
+	ctx context.Context,
 	client kubernetes.Interface,
 	provisionerName string,
 	provisioner Provisioner,
@@ -1684,7 +1684,7 @@ func newTestProvisionController(
 		provisionerOptions = append(provisionerOptions, options...)
 	}
 	ctrl := NewProvisionController(
-		logger,
+		ctx,
 		client,
 		provisionerName,
 		provisioner,
@@ -1696,7 +1696,7 @@ func newTestProvisionController(
 }
 
 func newTestProvisionControllerWithAdditionalNames(
-	logger klog.Logger,
+	ctx context.Context,
 	client kubernetes.Interface,
 	provisionerName string,
 	provisioner Provisioner,
@@ -1717,7 +1717,7 @@ func newTestProvisionControllerWithAdditionalNames(
 		provisionerOptions = append(provisionerOptions, options...)
 	}
 	ctrl := NewProvisionController(
-		logger,
+		ctx,
 		client,
 		provisionerName,
 		provisioner,
@@ -1729,7 +1729,7 @@ func newTestProvisionControllerWithAdditionalNames(
 }
 
 func newTestProvisionControllerSharedInformers(
-	klog klog.Logger,
+	ctx context.Context,
 	client kubernetes.Interface,
 	provisionerName string,
 	provisioner Provisioner,
@@ -1744,7 +1744,7 @@ func newTestProvisionControllerSharedInformers(
 	}()
 
 	ctrl := NewProvisionController(
-		klog,
+		ctx,
 		client,
 		provisionerName,
 		provisioner,
