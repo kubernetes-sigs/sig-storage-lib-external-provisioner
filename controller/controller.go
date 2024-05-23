@@ -606,12 +606,13 @@ func (ctrl *ProvisionController) HasRun() bool {
 // NewProvisionController creates a new provision controller using
 // the given configuration parameters and with private (non-shared) informers.
 func NewProvisionController(
-	logger klog.Logger,
+	ctx context.Context,
 	client kubernetes.Interface,
 	provisionerName string,
 	provisioner Provisioner,
 	options ...func(*ProvisionController) error,
 ) *ProvisionController {
+	logger := klog.FromContext(ctx)
 	id, err := os.Hostname()
 	if err != nil {
 		logger.Error(err, "Error getting hostname")
@@ -621,13 +622,11 @@ func NewProvisionController(
 	id = id + "_" + string(uuid.NewUUID())
 	component := provisionerName + "_" + id
 
-	// TODO: Once the following PR is merged, change to use StartLogging and StartRecordingToSinkWithContext
-	// https://github.com/kubernetes/kubernetes/pull/120729
 	v1.AddToScheme(scheme.Scheme)
-	broadcaster := record.NewBroadcaster()
+	broadcaster := record.NewBroadcaster(record.WithContext(ctx))
 	broadcaster.StartStructuredLogging(0)
 	broadcaster.StartRecordingToSink(&corev1.EventSinkImpl{Interface: client.CoreV1().Events(v1.NamespaceAll)})
-	eventRecorder := broadcaster.NewRecorder(scheme.Scheme, v1.EventSource{Component: component})
+	eventRecorder := broadcaster.NewRecorder(scheme.Scheme, v1.EventSource{Component: component}).WithLogger(logger)
 
 	controller := &ProvisionController{
 		client:                    client,

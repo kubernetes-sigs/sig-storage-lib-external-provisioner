@@ -137,7 +137,7 @@ func main() {
 
 	// Start the provision controller which will dynamically provision hostPath
 	// PVs
-	pc := controller.NewProvisionController(logger, clientset, provisionerName, hostPathProvisioner)
+	pc := controller.NewProvisionController(ctx, clientset, provisionerName, hostPathProvisioner)
 
 	// Never stops.
 	pc.Run(context.Background())
