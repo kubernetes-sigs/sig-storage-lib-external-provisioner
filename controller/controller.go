@@ -54,7 +54,7 @@ import (
 	"k8s.io/client-go/tools/record"
 	ref "k8s.io/client-go/tools/reference"
 	"k8s.io/client-go/util/workqueue"
-	"k8s.io/klog/v2"
+	klog "k8s.io/klog/v2"
 	"sigs.k8s.io/sig-storage-lib-external-provisioner/v10/controller/metrics"
 	"sigs.k8s.io/sig-storage-lib-external-provisioner/v10/util"
 )
@@ -1589,7 +1589,6 @@ func (ctrl *ProvisionController) deleteVolumeOperation(ctx context.Context, volu
 				return fmt.Errorf("expected volume but got %+v", volumeObj)
 			}
 			finalizers, modified := removeFinalizer(newVolume.ObjectMeta.Finalizers, finalizerPV)
-
 			// Only update the finalizers if we actually removed something
 			if modified {
 				if _, err = ctrl.patchPersistentVolumeWithFinalizers(ctx, newVolume, finalizers); err != nil {
@@ -1608,23 +1607,21 @@ func (ctrl *ProvisionController) deleteVolumeOperation(ctx context.Context, volu
 	return nil
 }
 
-// removeFinalizer removes finalizer from slice, returns slice and whether modified.
+// removeFinalizer removes finalizer from slice, returns the new slice and whether modified.
+// It does not modify the original slice.
 func removeFinalizer(finalizers []string, finalizerToRemove string) ([]string, bool) {
-	for i, finalizer := range finalizers {
-		if finalizer == finalizerToRemove {
-			finalizers = append(finalizers[:i], finalizers[i+1:]...)
-			if len(finalizers) == 0 {
-				finalizers = nil
-			}
-			return finalizers, true
+	ret := make([]string, 0, len(finalizers))
+	for _, finalizer := range finalizers {
+		if finalizer != finalizerToRemove {
+			ret = append(ret, finalizer)
 		}
 	}
 
-	if len(finalizers) == 0 {
-		finalizers = nil
+	if len(ret) == 0 {
+		ret = nil
 	}
 
-	return finalizers, false
+	return ret, len(ret) != len(finalizers)
 }
 
 // addFinalizer adds finalizer to slice, returns slice and whether modified.

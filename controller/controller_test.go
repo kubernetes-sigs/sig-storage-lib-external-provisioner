@@ -1406,12 +1406,21 @@ func TestRemoveFinalizer(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 
+			var originalFinalizers []string
+			if test.finalizers != nil {
+				originalFinalizers = make([]string, len(test.finalizers))
+				copy(originalFinalizers, test.finalizers)
+			}
+
 			modifiedFinalizers, modified := removeFinalizer(test.finalizers, test.finalizerToRemove)
 			if test.expectedModified != modified {
 				t.Errorf("expected modified %v but got %v\n", test.expectedModified, modified)
 			}
 			if !reflect.DeepEqual(test.expectedFinalizers, modifiedFinalizers) {
 				t.Errorf("expected finalizers %v but got %v\n", test.expectedFinalizers, modifiedFinalizers)
+			}
+			if !reflect.DeepEqual(test.finalizers, originalFinalizers) {
+				t.Errorf("removeFinalizer() has modified the source finalizers %+v to %+v", originalFinalizers, test.finalizers)
 			}
 		})
 	}
