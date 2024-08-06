@@ -1,3 +1,22 @@
+# Release notes for v10.0.1
+
+## Changes by Kind
+
+### Bug or Regression
+
+- Fixed removal of PV protection finalizer. PVs are no longer Terminating forever after PVC deletion. ([#174](https://github.com/kubernetes-sigs/sig-storage-lib-external-provisioner/pull/174), [@jsafrane](https://github.com/jsafrane))
+
+## Dependencies
+
+### Added
+_Nothing has changed._
+
+### Changed
+_Nothing has changed._
+
+### Removed
+_Nothing has changed._
+
 # Release notes for v10.0.0
 
 # Changelog since v9.0.3
