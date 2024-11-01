@@ -94,6 +94,8 @@ var (
 	errStopProvision = errors.New("stop provisioning")
 )
 
+type VolumeNameHook func(claim *v1.PersistentVolumeClaim) string
+
 // ProvisionController is a controller that provisions PersistentVolumes for
 // PersistentVolumeClaims.
 type ProvisionController struct {
@@ -179,6 +181,8 @@ type ProvisionController struct {
 	claimsInProgress sync.Map
 
 	volumeStore VolumeStore
+
+	volumeNameHook VolumeNameHook
 }
 
 const (
@@ -596,6 +600,16 @@ func DeletionTimeout(timeout time.Duration) func(*ProvisionController) error {
 	}
 }
 
+func VolumeName(hook VolumeNameHook) func(*ProvisionController) error {
+	return func(c *ProvisionController) error {
+		if c.HasRun() {
+			return errRuntime
+		}
+		c.volumeNameHook = hook
+		return nil
+	}
+}
+
 // HasRun returns whether the controller has Run
 func (ctrl *ProvisionController) HasRun() bool {
 	ctrl.hasRunLock.Lock()
@@ -652,6 +666,7 @@ func NewProvisionController(
 		addFinalizer:              DefaultAddFinalizer,
 		hasRun:                    false,
 		hasRunLock:                &sync.Mutex{},
+		volumeNameHook:            getProvisionedVolumeNameForClaim,
 	}
 
 	for _, option := range options {
@@ -1403,7 +1418,7 @@ func (ctrl *ProvisionController) provisionClaimOperation(ctx context.Context, cl
 	//  A previous doProvisionClaim may just have finished while we were waiting for
 	//  the locks. Check that PV (with deterministic name) hasn't been provisioned
 	//  yet.
-	pvName := ctrl.getProvisionedVolumeNameForClaim(claim)
+	pvName := ctrl.volumeNameHook(claim)
 	_, exists, err := ctrl.volumes.GetByKey(pvName)
 	if err == nil && exists {
 		// Volume has been already provisioned, nothing to do.
@@ -1653,7 +1668,7 @@ func getInClusterNamespace() string {
 
 // getProvisionedVolumeNameForClaim returns PV.Name for the provisioned volume.
 // The name must be unique.
-func (ctrl *ProvisionController) getProvisionedVolumeNameForClaim(claim *v1.PersistentVolumeClaim) string {
+func getProvisionedVolumeNameForClaim(claim *v1.PersistentVolumeClaim) string {
 	return "pvc-" + string(claim.UID)
 }
 
