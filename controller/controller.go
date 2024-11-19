@@ -1516,9 +1516,6 @@ func (ctrl *ProvisionController) provisionClaimOperation(ctx context.Context, cl
 	if err := ctrl.volumeStore.StoreVolume(logger, claim, volume); err != nil {
 		return ProvisioningFinished, err
 	}
-	if err = ctrl.volumes.Add(volume); err != nil {
-		utilruntime.HandleError(err)
-	}
 	return ProvisioningFinished, nil
 }
 
