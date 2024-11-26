@@ -710,10 +710,12 @@ func NewProvisionController(
 	}
 
 	if controller.claimInformer != nil {
+		// This resyncPeriod may not take effect, due to this external claimInformer may do no resyncs at all.
 		controller.claimInformer.AddEventHandlerWithResyncPeriod(claimHandler, controller.resyncPeriod)
 	} else {
 		controller.claimInformer = informer.Core().V1().PersistentVolumeClaims().Informer()
-		controller.claimInformer.AddEventHandler(claimHandler)
+		// Add resyncPeriod clearly when adding eventHandler to indicate this listener need resync.
+		controller.claimInformer.AddEventHandlerWithResyncPeriod(claimHandler, controller.resyncPeriod)
 	}
 	err = controller.claimInformer.AddIndexers(cache.Indexers{uidIndex: func(obj interface{}) ([]string, error) {
 		uid, err := getObjectUID(obj)
@@ -738,10 +740,11 @@ func NewProvisionController(
 	}
 
 	if controller.volumeInformer != nil {
+		// This resyncPeriod may not take effect, due to this external volumeInformer may do no resyncs at all.
 		controller.volumeInformer.AddEventHandlerWithResyncPeriod(volumeHandler, controller.resyncPeriod)
 	} else {
 		controller.volumeInformer = informer.Core().V1().PersistentVolumes().Informer()
-		controller.volumeInformer.AddEventHandler(volumeHandler)
+		controller.volumeInformer.AddEventHandlerWithResyncPeriod(volumeHandler, controller.resyncPeriod)
 	}
 	controller.volumes = controller.volumeInformer.GetStore()
 
