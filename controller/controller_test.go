@@ -46,7 +46,7 @@ import (
 	klog "k8s.io/klog/v2"
 	"k8s.io/klog/v2/ktesting"
 	_ "k8s.io/klog/v2/ktesting/init"
-	"sigs.k8s.io/sig-storage-lib-external-provisioner/v10/controller/metrics"
+	"sigs.k8s.io/sig-storage-lib-external-provisioner/v11/controller/metrics"
 )
 
 const (

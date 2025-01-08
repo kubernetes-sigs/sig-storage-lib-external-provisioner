@@ -14,4 +14,4 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package mount // import "sigs.k8s.io/sig-storage-lib-external-provisioner/v10/mount"
+package mount // import "sigs.k8s.io/sig-storage-lib-external-provisioner/v11/mount"
