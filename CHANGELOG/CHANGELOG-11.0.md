@@ -1,3 +1,13 @@
+# Release notes for v11.0.1
+
+# Changelog since v11.0.0
+
+## Changes by Kind
+
+### Other (Cleanup or Flake)
+
+- Update module name to sigs.k8s.io/sig-storage-lib-external-provisioner/v11 ([#182](https://github.com/kubernetes-sigs/sig-storage-lib-external-provisioner/pull/182), [@AndrewSirenko](https://github.com/AndrewSirenko))
+
 # Release notes for v11.0.0
 
 # Changelog since v10.0.1
