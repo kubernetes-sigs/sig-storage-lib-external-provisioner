@@ -26,6 +26,8 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	v1 "k8s.io/api/core/v1"
 	storage "k8s.io/api/storage/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -47,6 +49,7 @@ import (
 	"k8s.io/klog/v2/ktesting"
 	_ "k8s.io/klog/v2/ktesting/init"
 	"sigs.k8s.io/sig-storage-lib-external-provisioner/v11/controller/metrics"
+	"sigs.k8s.io/sig-storage-lib-external-provisioner/v11/util"
 )
 
 const (
@@ -1618,6 +1621,107 @@ func TestControllerSharedInformers(t *testing.T) {
 	}
 }
 
+// TestInfeasibleRetry tests that sidecar doesn't spam plugin upon infeasible error code (e.g. invalid VAC parameter)
+func TestInfeasibleRetry(t *testing.T) {
+	basePVC := newClaim("test-claim", "uid-1-1", "class-1", "foo.bar/baz", "", nil)
+	storageClass := newStorageClass("class-1", "foo.bar/baz")
+
+	tests := []struct {
+		name                        string
+		pvc                         *v1.PersistentVolumeClaim
+		expectedProvisionCallCount  int
+		csiProvisionError           error
+		eventuallyRemoveFromSlowSet bool
+	}{
+		{
+			name:                        "Should retry non-infeasible error normally",
+			pvc:                         basePVC,
+			expectedProvisionCallCount:  2,
+			csiProvisionError:           status.Errorf(codes.Internal, "fake non-infeasible error"),
+			eventuallyRemoveFromSlowSet: false,
+		},
+		{
+			name:                        "Should NOT retry infeasible error normally",
+			pvc:                         basePVC,
+			expectedProvisionCallCount:  1,
+			csiProvisionError:           status.Errorf(codes.InvalidArgument, "fake infeasible error"),
+			eventuallyRemoveFromSlowSet: false,
+		},
+		{
+			name:                        "Should EVENTUALLY retry infeasible error",
+			pvc:                         basePVC,
+			expectedProvisionCallCount:  2,
+			csiProvisionError:           status.Errorf(codes.InvalidArgument, "fake infeasible error"),
+			eventuallyRemoveFromSlowSet: true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			// Setup
+			_, ctx := ktesting.NewTestContext(t)
+
+			client := fake.NewSimpleClientset(test.pvc, storageClass)
+
+			provisioner := newTestProvisioner()
+			provisioner.returnError = test.csiProvisionError
+
+			ctrl := newTestProvisionController(ctx, client, "foo.bar/baz", provisioner)
+
+			if err := ctrl.classes.Add(storageClass); err != nil {
+				t.Fatalf("failed to add StorageClass to cache: %v", err)
+			}
+
+			// First attempt at provision
+			err := ctrl.syncClaim(ctx, test.pvc)
+			if !errors.Is(err, test.csiProvisionError) {
+				t.Errorf("expected error %v but got %v", test.csiProvisionError, err)
+			}
+
+			// For infeasible errors, verify the PVC was added to SlowSet
+			if status.Code(test.csiProvisionError) == codes.InvalidArgument {
+				key := string(test.pvc.UID)
+				if !ctrl.slowSet.Contains(key) {
+					t.Error("PVC should have been added to SlowSet after infeasible error")
+				}
+			}
+
+			// Fake time passing by removing from SlowSet
+			if test.eventuallyRemoveFromSlowSet {
+				key := string(test.pvc.UID)
+				ctrl.slowSet.Remove(key)
+			}
+
+			// Second attempt at provision
+			err2 := ctrl.syncClaim(ctx, test.pvc)
+			switch test.expectedProvisionCallCount {
+			case 1:
+				if !util.IsDelayRetryError(err2) {
+					t.Errorf("expected delay retry error but got %v", err2)
+				}
+			case 2:
+				if !errors.Is(err2, test.csiProvisionError) {
+					t.Errorf("expected error %v but got %v", test.csiProvisionError, err2)
+				}
+			default:
+				t.Errorf("unexpected provision error in second attempt: %v", err)
+			}
+
+			// Count the number of provision calls from the channel
+			provisionCount := 0
+			for len(provisioner.provisionCalls) > 0 {
+				<-provisioner.provisionCalls
+				provisionCount++
+			}
+
+			if test.expectedProvisionCallCount != provisionCount {
+				t.Errorf("expected %d provision calls, but got %d",
+					test.expectedProvisionCallCount, provisionCount)
+			}
+		})
+	}
+}
+
 type testMetrics struct {
 	provisioned counts
 	deleted     counts
@@ -1986,11 +2090,15 @@ type provisionParams struct {
 }
 
 func newTestProvisioner() *testProvisioner {
-	return &testProvisioner{make(chan provisionParams, 16)}
+	return &testProvisioner{
+		provisionCalls: make(chan provisionParams, 16),
+		returnError:    nil,
+	}
 }
 
 type testProvisioner struct {
 	provisionCalls chan provisionParams
+	returnError    error
 }
 
 var _ Provisioner = &testProvisioner{}
@@ -2031,6 +2139,10 @@ func (p *testProvisioner) Provision(ctx context.Context, options ProvisionOption
 	p.provisionCalls <- provisionParams{
 		selectedNode:      options.SelectedNode,
 		allowedTopologies: options.StorageClass.AllowedTopologies,
+	}
+
+	if p.returnError != nil {
+		return nil, ProvisioningFinished, p.returnError
 	}
 
 	// Sleep to simulate work done by Provision...for long enough that
