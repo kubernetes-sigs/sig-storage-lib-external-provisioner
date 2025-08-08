@@ -852,7 +852,6 @@ func (ctrl *ProvisionController) forgetVolume(obj interface{}) {
 		return
 	}
 	ctrl.volumeQueue.Forget(key)
-	ctrl.volumeQueue.Done(key)
 }
 
 // Run starts all of this controller's control loops
