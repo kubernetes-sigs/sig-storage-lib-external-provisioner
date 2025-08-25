@@ -25,6 +25,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -130,8 +131,8 @@ type ProvisionController struct {
 	// To determine if the informer is internal or external
 	customClaimInformer, customVolumeInformer, customClassInformer bool
 
-	claimQueue  workqueue.RateLimitingInterface
-	volumeQueue workqueue.RateLimitingInterface
+	claimQueue  workqueue.TypedRateLimitingInterface[string]
+	volumeQueue workqueue.TypedRateLimitingInterface[string]
 
 	// Identity of this controller, generated at creation time and not persisted
 	// across restarts. Useful only for debugging, for seeing the source of
@@ -145,14 +146,14 @@ type ProvisionController struct {
 	provisionTimeout time.Duration
 	deletionTimeout  time.Duration
 
-	rateLimiter               workqueue.RateLimiter
+	rateLimiter               workqueue.TypedRateLimiter[string]
 	exponentialBackOffOnError bool
 	threadiness               int
 
 	createProvisionedPVBackoff    *wait.Backoff
 	createProvisionedPVRetryCount int
 	createProvisionedPVInterval   time.Duration
-	createProvisionerPVLimiter    workqueue.RateLimiter
+	createProvisionerPVLimiter    workqueue.TypedRateLimiter[string]
 
 	failedProvisionThreshold, failedDeleteThreshold int
 
@@ -257,7 +258,7 @@ func Threadiness(threadiness int) func(*ProvisionController) error {
 
 // RateLimiter is the workqueue.RateLimiter to use for the provisioning and
 // deleting work queues. If set, ExponentialBackOffOnError is ignored.
-func RateLimiter(rateLimiter workqueue.RateLimiter) func(*ProvisionController) error {
+func RateLimiter(rateLimiter workqueue.TypedRateLimiter[string]) func(*ProvisionController) error {
 	return func(c *ProvisionController) error {
 		if c.HasRun() {
 			return errRuntime
@@ -355,7 +356,7 @@ func CreateProvisionedPVBackoff(backoff wait.Backoff) func(*ProvisionController)
 // and the controller continues saving PV to API server indefinitely.
 // This option cannot be used with CreateProvisionedPVBackoff or CreateProvisionedPVInterval
 // or CreateProvisionedPVRetryCount.
-func CreateProvisionedPVLimiter(limiter workqueue.RateLimiter) func(*ProvisionController) error {
+func CreateProvisionedPVLimiter(limiter workqueue.TypedRateLimiter[string]) func(*ProvisionController) error {
 	return func(c *ProvisionController) error {
 		if c.HasRun() {
 			return errRuntime
@@ -701,23 +702,23 @@ func NewProvisionController(
 		}
 	}
 
-	var rateLimiter workqueue.RateLimiter
+	var rateLimiter workqueue.TypedRateLimiter[string]
 	if controller.rateLimiter != nil {
 		// rateLimiter set via parameter takes precedence
 		rateLimiter = controller.rateLimiter
 	} else if controller.exponentialBackOffOnError {
-		rateLimiter = workqueue.NewMaxOfRateLimiter(
-			workqueue.NewItemExponentialFailureRateLimiter(15*time.Second, 1000*time.Second),
-			&workqueue.BucketRateLimiter{Limiter: rate.NewLimiter(rate.Limit(10), 100)},
+		rateLimiter = workqueue.NewTypedMaxOfRateLimiter(
+			workqueue.NewTypedItemExponentialFailureRateLimiter[string](15*time.Second, 1000*time.Second),
+			&workqueue.TypedBucketRateLimiter[string]{Limiter: rate.NewLimiter(rate.Limit(10), 100)},
 		)
 	} else {
-		rateLimiter = workqueue.NewMaxOfRateLimiter(
-			workqueue.NewItemExponentialFailureRateLimiter(15*time.Second, 15*time.Second),
-			&workqueue.BucketRateLimiter{Limiter: rate.NewLimiter(rate.Limit(10), 100)},
+		rateLimiter = workqueue.NewTypedMaxOfRateLimiter(
+			workqueue.NewTypedItemExponentialFailureRateLimiter[string](15*time.Second, 15*time.Second),
+			&workqueue.TypedBucketRateLimiter[string]{Limiter: rate.NewLimiter(rate.Limit(10), 100)},
 		)
 	}
-	controller.claimQueue = workqueue.NewNamedRateLimitingQueue(rateLimiter, "claims")
-	controller.volumeQueue = workqueue.NewNamedRateLimitingQueue(rateLimiter, "volumes")
+	controller.claimQueue = workqueue.NewTypedRateLimitingQueueWithConfig(rateLimiter, workqueue.TypedRateLimitingQueueConfig[string]{Name: "claims"})
+	controller.volumeQueue = workqueue.NewTypedRateLimitingQueueWithConfig(rateLimiter, workqueue.TypedRateLimitingQueueConfig[string]{Name: "volumes"})
 
 	informer := informers.NewSharedInformerFactory(client, controller.resyncPeriod)
 
@@ -725,9 +726,9 @@ func NewProvisionController(
 	// PersistentVolumeClaims
 
 	claimHandler := cache.ResourceEventHandlerFuncs{
-		AddFunc:    func(obj interface{}) { controller.enqueueClaim(obj) },
-		UpdateFunc: func(oldObj, newObj interface{}) { controller.enqueueClaim(newObj) },
-		DeleteFunc: func(obj interface{}) {
+		AddFunc:    func(obj any) { controller.enqueueClaim(obj) },
+		UpdateFunc: func(oldObj, newObj any) { controller.enqueueClaim(newObj) },
+		DeleteFunc: func(obj any) {
 			// NOOP. The claim is either in claimsInProgress and in the queue, so it will be processed as usual
 			// or it's not in claimsInProgress and then we don't care
 		},
@@ -739,7 +740,7 @@ func NewProvisionController(
 		controller.claimInformer = informer.Core().V1().PersistentVolumeClaims().Informer()
 		controller.claimInformer.AddEventHandler(claimHandler)
 	}
-	err = controller.claimInformer.AddIndexers(cache.Indexers{uidIndex: func(obj interface{}) ([]string, error) {
+	err = controller.claimInformer.AddIndexers(cache.Indexers{uidIndex: func(obj any) ([]string, error) {
 		uid, err := getObjectUID(obj)
 		if err != nil {
 			return nil, err
@@ -756,9 +757,9 @@ func NewProvisionController(
 	// PersistentVolumes
 
 	volumeHandler := cache.ResourceEventHandlerFuncs{
-		AddFunc:    func(obj interface{}) { controller.enqueueVolume(obj) },
-		UpdateFunc: func(oldObj, newObj interface{}) { controller.enqueueVolume(newObj) },
-		DeleteFunc: func(obj interface{}) { controller.forgetVolume(obj) },
+		AddFunc:    func(obj any) { controller.enqueueVolume(obj) },
+		UpdateFunc: func(oldObj, newObj any) { controller.enqueueVolume(newObj) },
+		DeleteFunc: func(obj any) { controller.forgetVolume(obj) },
 	}
 
 	if controller.volumeInformer != nil {
@@ -804,7 +805,7 @@ func NewProvisionController(
 	return controller
 }
 
-func getObjectUID(obj interface{}) (string, error) {
+func getObjectUID(obj any) (string, error) {
 	var object metav1.Object
 	var ok bool
 	if object, ok = obj.(metav1.Object); !ok {
@@ -821,7 +822,7 @@ func getObjectUID(obj interface{}) (string, error) {
 }
 
 // enqueueClaim takes an obj and converts it into UID that is then put onto claim work queue.
-func (ctrl *ProvisionController) enqueueClaim(obj interface{}) {
+func (ctrl *ProvisionController) enqueueClaim(obj any) {
 	uid, err := getObjectUID(obj)
 	if err != nil {
 		utilruntime.HandleError(err)
@@ -832,7 +833,7 @@ func (ctrl *ProvisionController) enqueueClaim(obj interface{}) {
 
 // enqueueVolume takes an obj and converts it into a namespace/name string which
 // is then put onto the given work queue.
-func (ctrl *ProvisionController) enqueueVolume(obj interface{}) {
+func (ctrl *ProvisionController) enqueueVolume(obj any) {
 	var key string
 	var err error
 	if key, err = cache.DeletionHandlingMetaNamespaceKeyFunc(obj); err != nil {
@@ -844,7 +845,7 @@ func (ctrl *ProvisionController) enqueueVolume(obj interface{}) {
 
 // forgetVolume Forgets an obj from the given work queue, telling the queue to
 // stop tracking its retries because e.g. the obj was deleted
-func (ctrl *ProvisionController) forgetVolume(obj interface{}) {
+func (ctrl *ProvisionController) forgetVolume(obj any) {
 	var key string
 	var err error
 	if key, err = cache.DeletionHandlingMetaNamespaceKeyFunc(obj); err != nil {
@@ -963,7 +964,7 @@ func (ctrl *ProvisionController) runVolumeWorker(ctx context.Context) {
 
 // processNextClaimWorkItem processes items from claimQueue
 func (ctrl *ProvisionController) processNextClaimWorkItem(ctx context.Context) bool {
-	obj, shutdown := ctrl.claimQueue.Get()
+	key, shutdown := ctrl.claimQueue.Get()
 
 	if shutdown {
 		return false
@@ -977,23 +978,17 @@ func (ctrl *ProvisionController) processNextClaimWorkItem(ctx context.Context) b
 			defer cancel()
 			ctx = timeout
 		}
-		defer ctrl.claimQueue.Done(obj)
-		var key string
-		var ok bool
-		if key, ok = obj.(string); !ok {
-			ctrl.claimQueue.Forget(obj)
-			return fmt.Errorf("expected string in workqueue but got %#v", obj)
-		}
+		defer ctrl.claimQueue.Done(key)
 
 		if err := ctrl.syncClaimHandler(ctx, key); err != nil {
 			if ctrl.failedProvisionThreshold == 0 {
-				logger.Info("Retrying syncing claim", "key", key, "failures", ctrl.claimQueue.NumRequeues(obj))
-				ctrl.claimQueue.AddRateLimited(obj)
-			} else if ctrl.claimQueue.NumRequeues(obj) < ctrl.failedProvisionThreshold {
-				logger.Info("Retrying syncing claim because failures < threshold", "key", key, "failures", ctrl.claimQueue.NumRequeues(obj), "threshold", ctrl.failedProvisionThreshold)
-				ctrl.claimQueue.AddRateLimited(obj)
+				logger.Info("Retrying syncing claim", "key", key, "failures", ctrl.claimQueue.NumRequeues(key))
+				ctrl.claimQueue.AddRateLimited(key)
+			} else if ctrl.claimQueue.NumRequeues(key) < ctrl.failedProvisionThreshold {
+				logger.Info("Retrying syncing claim because failures < threshold", "key", key, "failures", ctrl.claimQueue.NumRequeues(key), "threshold", ctrl.failedProvisionThreshold)
+				ctrl.claimQueue.AddRateLimited(key)
 			} else {
-				logger.Error(nil, "Giving up syncing claim because failures >= threshold", "key", key, "failures", ctrl.claimQueue.NumRequeues(obj), "threshold", ctrl.failedProvisionThreshold)
+				logger.Error(nil, "Giving up syncing claim because failures >= threshold", "key", key, "failures", ctrl.claimQueue.NumRequeues(key), "threshold", ctrl.failedProvisionThreshold)
 				logger.V(2).Info("Removing PVC from claims in progress", "key", key)
 				ctrl.claimsInProgress.Delete(key) // This can leak a volume that's being provisioned in the background!
 				// Done but do not Forget: it will not be in the queue but NumRequeues
@@ -1002,7 +997,7 @@ func (ctrl *ProvisionController) processNextClaimWorkItem(ctx context.Context) b
 			return fmt.Errorf("error syncing claim %q: %s", key, err.Error())
 		}
 
-		ctrl.claimQueue.Forget(obj)
+		ctrl.claimQueue.Forget(key)
 		// Silently remove the PVC from list of volumes in progress. The provisioning either succeeded
 		// or the PVC was ignored by this provisioner.
 		ctrl.claimsInProgress.Delete(key)
@@ -1019,7 +1014,7 @@ func (ctrl *ProvisionController) processNextClaimWorkItem(ctx context.Context) b
 
 // processNextVolumeWorkItem processes items from volumeQueue
 func (ctrl *ProvisionController) processNextVolumeWorkItem(ctx context.Context) bool {
-	obj, shutdown := ctrl.volumeQueue.Get()
+	key, shutdown := ctrl.volumeQueue.Get()
 
 	if shutdown {
 		return false
@@ -1033,30 +1028,24 @@ func (ctrl *ProvisionController) processNextVolumeWorkItem(ctx context.Context) 
 			defer cancel()
 			ctx = timeout
 		}
-		defer ctrl.volumeQueue.Done(obj)
-		var key string
-		var ok bool
-		if key, ok = obj.(string); !ok {
-			ctrl.volumeQueue.Forget(obj)
-			return fmt.Errorf("expected string in workqueue but got %#v", obj)
-		}
+		defer ctrl.volumeQueue.Done(key)
 
 		if err := ctrl.syncVolumeHandler(ctx, key); err != nil {
 			if ctrl.failedDeleteThreshold == 0 {
-				logger.Info("Retrying syncing volume", "key", key, "failures", ctrl.volumeQueue.NumRequeues(obj))
-				ctrl.volumeQueue.AddRateLimited(obj)
-			} else if ctrl.volumeQueue.NumRequeues(obj) < ctrl.failedDeleteThreshold {
-				logger.Info("Retrying syncing volume because failures < threshold", "key", key, "failures", ctrl.volumeQueue.NumRequeues(obj), "threshold", ctrl.failedDeleteThreshold)
-				ctrl.volumeQueue.AddRateLimited(obj)
+				logger.Info("Retrying syncing volume", "key", key, "failures", ctrl.volumeQueue.NumRequeues(key))
+				ctrl.volumeQueue.AddRateLimited(key)
+			} else if ctrl.volumeQueue.NumRequeues(key) < ctrl.failedDeleteThreshold {
+				logger.Info("Retrying syncing volume because failures < threshold", "key", key, "failures", ctrl.volumeQueue.NumRequeues(key), "threshold", ctrl.failedDeleteThreshold)
+				ctrl.volumeQueue.AddRateLimited(key)
 			} else {
-				logger.Info("Giving up syncing volume because failures >= threshold", "key", key, "failures", ctrl.volumeQueue.NumRequeues(obj), "threshold", ctrl.failedDeleteThreshold)
+				logger.Info("Giving up syncing volume because failures >= threshold", "key", key, "failures", ctrl.volumeQueue.NumRequeues(key), "threshold", ctrl.failedDeleteThreshold)
 				// Done but do not Forget: it will not be in the queue but NumRequeues
 				// will be saved until the obj is deleted from kubernetes
 			}
 			return fmt.Errorf("error syncing volume %q: %s", key, err.Error())
 		}
 
-		ctrl.volumeQueue.Forget(obj)
+		ctrl.volumeQueue.Forget(key)
 		return nil
 	}()
 
@@ -1074,7 +1063,7 @@ func (ctrl *ProvisionController) syncClaimHandler(ctx context.Context, key strin
 	if err != nil {
 		return err
 	}
-	var claimObj interface{}
+	var claimObj any
 	if len(objs) > 0 {
 		claimObj = objs[0]
 	} else {
@@ -1104,7 +1093,7 @@ func (ctrl *ProvisionController) syncVolumeHandler(ctx context.Context, key stri
 
 // syncClaim checks if the claim should have a volume provisioned for it and
 // provisions one if so. Returns an error if the claim is to be requeued.
-func (ctrl *ProvisionController) syncClaim(ctx context.Context, obj interface{}) error {
+func (ctrl *ProvisionController) syncClaim(ctx context.Context, obj any) error {
 	claim, ok := obj.(*v1.PersistentVolumeClaim)
 	if !ok {
 		return fmt.Errorf("expected claim but got %+v", obj)
@@ -1155,7 +1144,7 @@ func (ctrl *ProvisionController) syncClaim(ctx context.Context, obj interface{})
 }
 
 // syncVolume checks if the volume should be deleted and deletes if so
-func (ctrl *ProvisionController) syncVolume(ctx context.Context, obj interface{}) error {
+func (ctrl *ProvisionController) syncVolume(ctx context.Context, obj any) error {
 	volume, ok := obj.(*v1.PersistentVolume)
 	if !ok {
 		return fmt.Errorf("expected volume but got %+v", obj)
@@ -1181,7 +1170,7 @@ func (ctrl *ProvisionController) syncVolume(ctx context.Context, obj interface{}
 	return nil
 }
 
-func (ctrl *ProvisionController) isProvisionerForVolume(ctx context.Context, volume *v1.PersistentVolume) bool {
+func (ctrl *ProvisionController) isProvisionerForVolume(_ context.Context, volume *v1.PersistentVolume) bool {
 	if metav1.HasAnnotation(volume.ObjectMeta, annDynamicallyProvisioned) {
 		provisionPluginName := volume.Annotations[annDynamicallyProvisioned]
 		migratedAnn := volume.Annotations[annMigratedTo]
@@ -1243,12 +1232,7 @@ func (ctrl *ProvisionController) knownProvisioner(provisioner string) bool {
 	if provisioner == ctrl.provisionerName {
 		return true
 	}
-	for _, p := range ctrl.additionalProvisionerNames {
-		if p == provisioner {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(ctrl.additionalProvisionerNames, provisioner)
 }
 
 // shouldProvision returns whether a claim should have a volume provisioned for
@@ -1343,12 +1327,7 @@ func (ctrl *ProvisionController) canProvision(ctx context.Context, claim *v1.Per
 }
 
 func (ctrl *ProvisionController) checkFinalizer(volume *v1.PersistentVolume, finalizer string) bool {
-	for _, f := range volume.ObjectMeta.Finalizers {
-		if f == finalizer {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(volume.ObjectMeta.Finalizers, finalizer)
 }
 
 func (ctrl *ProvisionController) updateProvisionStats(claim *v1.PersistentVolumeClaim, err error, startTime time.Time) {
@@ -1735,11 +1714,9 @@ func removeFinalizer(finalizers []string, finalizerToRemove string) ([]string, b
 
 // addFinalizer adds finalizer to slice, returns slice and whether modified.
 func addFinalizer(finalizers []string, finalizerToAdd string) ([]string, bool) {
-	for _, finalizer := range finalizers {
-		if finalizer == finalizerToAdd {
-			// finalizer already exists
-			return finalizers, false
-		}
+	if slices.Contains(finalizers, finalizerToAdd) {
+		// finalizer already exists
+		return finalizers, false
 	}
 
 	return append(finalizers, finalizerToAdd), true

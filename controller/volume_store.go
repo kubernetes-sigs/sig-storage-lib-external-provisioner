@@ -58,7 +58,7 @@ type VolumeStore interface {
 // After failed save, volume is re-qeueued with exponential backoff.
 type queueStore struct {
 	client        kubernetes.Interface
-	queue         workqueue.RateLimitingInterface
+	queue         workqueue.TypedRateLimitingInterface[string]
 	eventRecorder record.EventRecorder
 	claimsIndexer cache.Indexer
 
@@ -70,14 +70,14 @@ var _ VolumeStore = &queueStore{}
 // NewVolumeStoreQueue returns VolumeStore that uses asynchronous workqueue to save PVs.
 func NewVolumeStoreQueue(
 	client kubernetes.Interface,
-	limiter workqueue.RateLimiter,
+	limiter workqueue.TypedRateLimiter[string],
 	claimsIndexer cache.Indexer,
 	eventRecorder record.EventRecorder,
 ) VolumeStore {
 
 	return &queueStore{
 		client:        client,
-		queue:         workqueue.NewNamedRateLimitingQueue(limiter, "unsavedpvs"),
+		queue:         workqueue.NewTypedRateLimitingQueueWithConfig(limiter, workqueue.TypedRateLimitingQueueConfig[string]{Name: "unsavedpvs"}),
 		claimsIndexer: claimsIndexer,
 		eventRecorder: eventRecorder,
 	}
@@ -98,7 +98,7 @@ func (q *queueStore) Run(ctx context.Context, threadiness int) {
 	logger.Info("Starting save volume queue")
 	defer q.queue.ShutDown()
 
-	for i := 0; i < threadiness; i++ {
+	for range threadiness {
 		go wait.UntilWithContext(ctx, q.saveVolumeWorker, time.Second)
 	}
 	<-ctx.Done()
@@ -111,19 +111,11 @@ func (q *queueStore) saveVolumeWorker(ctx context.Context) {
 }
 
 func (q *queueStore) processNextWorkItem(ctx context.Context) bool {
-	obj, shutdown := q.queue.Get()
-	defer q.queue.Done(obj)
+	volumeName, shutdown := q.queue.Get()
+	defer q.queue.Done(volumeName)
 
 	if shutdown {
 		return false
-	}
-
-	var volumeName string
-	var ok bool
-	if volumeName, ok = obj.(string); !ok {
-		q.queue.Forget(obj)
-		utilruntime.HandleError(fmt.Errorf("expected string in save workqueue but got %#v", obj))
-		return true
 	}
 
 	volumeObj, found := q.volumes.Load(volumeName)

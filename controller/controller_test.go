@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"reflect"
 	"testing"
 	"time"
@@ -816,7 +817,7 @@ func TestController(t *testing.T) {
 			}
 
 			if test.volumeQueueStore {
-				ctrl.volumeStore = NewVolumeStoreQueue(client, workqueue.DefaultItemBasedRateLimiter(), ctrl.claimsIndexer, ctrl.eventRecorder)
+				ctrl.volumeStore = NewVolumeStoreQueue(client, workqueue.DefaultTypedItemBasedRateLimiter[string](), ctrl.claimsIndexer, ctrl.eventRecorder)
 			}
 
 			if test.enqueueClaim != nil {
@@ -824,7 +825,7 @@ func TestController(t *testing.T) {
 			}
 
 			// Run forever...
-			go ctrl.Run(context.Background())
+			go ctrl.Run(ctx)
 
 			// When we shutdown while something is happening the fake client panics
 			// with send on closed channel...but the test passed, so ignore
@@ -832,13 +833,13 @@ func TestController(t *testing.T) {
 
 			time.Sleep(2 * resyncPeriod)
 
-			pvList, _ := client.CoreV1().PersistentVolumes().List(context.Background(), metav1.ListOptions{})
+			pvList, _ := client.CoreV1().PersistentVolumes().List(ctx, metav1.ListOptions{})
 			if !reflect.DeepEqual(test.expectedVolumes, pvList.Items) {
 				t.Errorf("expected PVs:\n %v\n but got:\n %v\n", test.expectedVolumes, pvList.Items)
 			}
 
 			claimsInProgress := sets.NewString()
-			ctrl.claimsInProgress.Range(func(key, value interface{}) bool {
+			ctrl.claimsInProgress.Range(func(key, value any) bool {
 				claimsInProgress.Insert(key.(string))
 				return true
 			})
@@ -851,7 +852,7 @@ func TestController(t *testing.T) {
 				queue := ctrl.volumeStore.(*queueStore)
 				// convert queue.volumes to array
 				queuedVolumes := []*v1.PersistentVolume{}
-				queue.volumes.Range(func(key, value interface{}) bool {
+				queue.volumes.Range(func(key, value any) bool {
 					volume, ok := value.(*v1.PersistentVolume)
 					if !ok {
 						t.Errorf("Expected PersistentVolume in volume store queue, got %+v", value)
@@ -878,7 +879,7 @@ func TestController(t *testing.T) {
 			}
 
 			if test.expectedClaims != nil {
-				pvcList, _ := client.CoreV1().PersistentVolumeClaims(v1.NamespaceDefault).List(context.Background(), metav1.ListOptions{})
+				pvcList, _ := client.CoreV1().PersistentVolumeClaims(v1.NamespaceDefault).List(ctx, metav1.ListOptions{})
 				if !reflect.DeepEqual(test.expectedClaims, pvcList.Items) {
 					t.Errorf("expected PVCs:\n %v\n but got:\n %v\n", test.expectedClaims, pvcList.Items)
 				}
@@ -965,7 +966,7 @@ func TestTopologyParams(t *testing.T) {
 			provisioner := newTestProvisioner()
 			ctrl := newTestProvisionController(ctx, client, "foo.bar/baz" /* provisionerName */, provisioner)
 			// Run forever...
-			go ctrl.Run(context.Background())
+			go ctrl.Run(ctx)
 
 			// When we shutdown while something is happening the fake client panics
 			// with send on closed channel...but the test passed, so ignore
@@ -1132,7 +1133,7 @@ func TestShouldProvision(t *testing.T) {
 				}
 			}
 
-			should, err := ctrl.shouldProvision(context.Background(), test.claim)
+			should, err := ctrl.shouldProvision(ctx, test.claim)
 			if test.expectedShould != should {
 				t.Errorf("expected should provision %v but got %v\n", test.expectedShould, should)
 			}
@@ -1204,7 +1205,7 @@ func TestShouldDelete(t *testing.T) {
 			ctrl := newTestProvisionController(ctx, client, test.provisionerName, provisioner)
 			test.volume.ObjectMeta.DeletionTimestamp = test.deletionTimestamp
 
-			should := ctrl.shouldDelete(context.Background(), test.volume)
+			should := ctrl.shouldDelete(ctx, test.volume)
 			if test.expectedShould != should {
 				t.Errorf("expected should delete %v but got %v\n", test.expectedShould, should)
 			}
@@ -1292,7 +1293,7 @@ func TestIsProvisionerForVolume(t *testing.T) {
 			client := fake.NewSimpleClientset()
 			provisioner := newTestProvisioner()
 			ctrl := newTestProvisionController(ctx, client, test.provisionerName, provisioner)
-			should := ctrl.isProvisionerForVolume(context.Background(), test.volume)
+			should := ctrl.isProvisionerForVolume(ctx, test.volume)
 			if test.expectedShould != should {
 				t.Errorf("expected should delete %v but got %v\n", test.expectedShould, should)
 			}
@@ -1354,7 +1355,7 @@ func TestShouldDeleteWithFinalizer(t *testing.T) {
 			ctrl := newTestProvisionController(ctx, client, test.provisionerName, provisioner, provisionerOptions...)
 			test.volume.ObjectMeta.DeletionTimestamp = test.deletionTimestamp
 
-			should := ctrl.shouldDelete(context.Background(), test.volume)
+			should := ctrl.shouldDelete(ctx, test.volume)
 			if test.expectedShould != should {
 				t.Errorf("expected should delete %v but got %v\n", test.expectedShould, should)
 			}
@@ -1555,8 +1556,8 @@ func TestCanProvision(t *testing.T) {
 			client := fake.NewSimpleClientset(test.claim)
 			ctrl := newTestProvisionController(ctx, client, provisionerName, test.provisioner)
 
-			can := ctrl.canProvision(context.Background(), test.claim)
-			if !reflect.DeepEqual(test.expectedCan, can) {
+			can := ctrl.canProvision(ctx, test.claim)
+			if (test.expectedCan != nil) != (can != nil) || (test.expectedCan != nil && test.expectedCan.Error() != can.Error()) {
 				t.Errorf("expected can provision %v but got %v\n", test.expectedCan, can)
 			}
 		})
@@ -1602,8 +1603,8 @@ func TestControllerSharedInformers(t *testing.T) {
 			defer close(stopCh)
 
 			// Run forever...
-			go ctrl.Run(context.Background())
-			go informersFactory.Start(context.Background().Done())
+			go ctrl.Run(ctx)
+			go informersFactory.Start(ctx.Done())
 
 			// When we shutdown while something is happening the fake client panics
 			// with send on closed channel...but the test passed, so ignore
@@ -1612,7 +1613,7 @@ func TestControllerSharedInformers(t *testing.T) {
 			informersFactory.WaitForCacheSync(stopCh)
 			time.Sleep(2 * sharedResyncPeriod)
 
-			pvList, _ := client.CoreV1().PersistentVolumes().List(context.Background(), metav1.ListOptions{})
+			pvList, _ := client.CoreV1().PersistentVolumes().List(ctx, metav1.ListOptions{})
 			if (len(test.expectedVolumes) > 0 || len(pvList.Items) > 0) &&
 				!reflect.DeepEqual(test.expectedVolumes, pvList.Items) {
 				t.Errorf("expected PVs:\n %v\n but got:\n %v\n", test.expectedVolumes, pvList.Items)
@@ -1953,9 +1954,7 @@ func newClaim(name, claimUID, class, provisioner, volumeName string, annotations
 		claim.Annotations[annBetaStorageProvisioner] = provisioner
 	}
 	// Allow overwriting of above annotations
-	for k, v := range annotations {
-		claim.Annotations[k] = v
-	}
+	maps.Copy(claim.Annotations, annotations)
 	return claim
 }
 
@@ -2280,7 +2279,6 @@ var _ Provisioner = &provisioner{}
 
 func (m *provisioner) Delete(ctx context.Context, pv *v1.PersistentVolume) error {
 	return fmt.Errorf("Not implemented")
-
 }
 
 func (m *provisioner) Provision(ctx context.Context, options ProvisionOptions) (*v1.PersistentVolume, ProvisioningState, error) {
