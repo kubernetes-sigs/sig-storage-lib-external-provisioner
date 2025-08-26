@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"slices"
 
 	"github.com/miekg/dns"
 	v1 "k8s.io/api/core/v1"
@@ -52,12 +53,7 @@ func RoundUpToGiB(sizeBytes int64) int64 {
 
 // AccessModesContains returns whether the requested mode is contained by modes
 func AccessModesContains(modes []v1.PersistentVolumeAccessMode, mode v1.PersistentVolumeAccessMode) bool {
-	for _, m := range modes {
-		if m == mode {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(modes, mode)
 }
 
 // AccessModesContainedInAll returns whether all of the requested modes are contained by modes

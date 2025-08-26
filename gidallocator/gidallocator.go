@@ -90,6 +90,9 @@ func (a *Allocator) AllocateNext(logger klog.Logger, options controller.Provisio
 // table.
 func (a *Allocator) Release(logger klog.Logger, volume *v1.PersistentVolume) error {
 	class, err := a.client.StorageV1().StorageClasses().Get(context.Background(), util.GetPersistentVolumeClass(volume), metav1.GetOptions{})
+	if err != nil {
+		return err
+	}
 	gidMin, gidMax, err := parseClassParameters(class.Parameters)
 	if err != nil {
 		return err
