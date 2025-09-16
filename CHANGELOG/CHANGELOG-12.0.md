@@ -1,3 +1,12 @@
+# Release notes for v12.0.1
+
+# Changelog since v12.0.0
+
+### Uncategorized
+
+- Update go module to v12 ([#193](https://github.com/kubernetes-sigs/sig-storage-lib-external-provisioner/pull/196), [@sunnylovestiramisu](https://github.com/sunnylovestiramisu))
+
+
 # Release notes for v12.0.0
 
 # Changelog since v11.1.0
