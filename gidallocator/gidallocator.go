@@ -28,9 +28,9 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	klog "k8s.io/klog/v2"
-	"sigs.k8s.io/sig-storage-lib-external-provisioner/v11/allocator"
-	"sigs.k8s.io/sig-storage-lib-external-provisioner/v11/controller"
-	"sigs.k8s.io/sig-storage-lib-external-provisioner/v11/util"
+	"sigs.k8s.io/sig-storage-lib-external-provisioner/v12/allocator"
+	"sigs.k8s.io/sig-storage-lib-external-provisioner/v12/controller"
+	"sigs.k8s.io/sig-storage-lib-external-provisioner/v12/util"
 )
 
 const (
