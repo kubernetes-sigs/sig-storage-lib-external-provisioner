@@ -49,8 +49,8 @@ import (
 	klog "k8s.io/klog/v2"
 	"k8s.io/klog/v2/ktesting"
 	_ "k8s.io/klog/v2/ktesting/init"
-	"sigs.k8s.io/sig-storage-lib-external-provisioner/v12/controller/metrics"
-	"sigs.k8s.io/sig-storage-lib-external-provisioner/v12/util"
+	"sigs.k8s.io/sig-storage-lib-external-provisioner/v13/controller/metrics"
+	"sigs.k8s.io/sig-storage-lib-external-provisioner/v13/util"
 )
 
 const (
@@ -562,24 +562,6 @@ func TestController(t *testing.T) {
 			},
 		},
 		{
-			name: "remove selectedNode if no node exists",
-			objs: []runtime.Object{
-				newStorageClassWithVolumeBindingMode("class-1", "foo.bar/baz", &modeWait),
-				newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", map[string]string{annBetaStorageProvisioner: "foo.bar/baz", annSelectedNode: "node-wrong"}),
-			},
-			provisionerName: "foo.bar/baz",
-			provisioner:     newBadTestProvisioner(),
-			expectedClaims: []v1.PersistentVolumeClaim{
-				*newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", map[string]string{annBetaStorageProvisioner: "foo.bar/baz"}),
-			},
-			expectedClaimsInProgress: nil, // not in progress anymore
-			expectedMetrics: testMetrics{
-				provisioned: counts{
-					"class-1": count{failed: 1},
-				},
-			},
-		},
-		{
 			name: "do not remove selectedNode if nothing changes",
 			objs: []runtime.Object{
 				newStorageClassWithVolumeBindingMode("class-1", "foo.bar/baz", &modeWait),
@@ -590,23 +572,6 @@ func TestController(t *testing.T) {
 			provisioner:     newNoChangeTestProvisioner(),
 			expectedClaims: []v1.PersistentVolumeClaim{
 				*newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", map[string]string{annBetaStorageProvisioner: "foo.bar/baz", annSelectedNode: "node-1"}),
-			},
-			expectedMetrics: testMetrics{
-				provisioned: counts{
-					"class-1": count{failed: 1},
-				},
-			},
-		},
-		{
-			name: "remove selectedNode if nothing changes and no node exists",
-			objs: []runtime.Object{
-				newStorageClassWithVolumeBindingMode("class-1", "foo.bar/baz", &modeWait),
-				newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", map[string]string{annBetaStorageProvisioner: "foo.bar/baz", annSelectedNode: "node-wrong"}),
-			},
-			provisionerName: "foo.bar/baz",
-			provisioner:     newNoChangeTestProvisioner(),
-			expectedClaims: []v1.PersistentVolumeClaim{
-				*newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", map[string]string{annBetaStorageProvisioner: "foo.bar/baz"}),
 			},
 			expectedMetrics: testMetrics{
 				provisioned: counts{
@@ -931,7 +896,7 @@ func TestTopologyParams(t *testing.T) {
 				newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", map[string]string{annSelectedNode: "node-1"}),
 			},
 			expectedParams: &provisionParams{
-				selectedNode: newNode("node-1"),
+				selectedNodeName: "node-1",
 			},
 		},
 		{
@@ -947,16 +912,8 @@ func TestTopologyParams(t *testing.T) {
 			},
 			expectedParams: &provisionParams{
 				allowedTopologies: dummyAllowedTopology,
-				selectedNode:      newNode("node-1"),
+				selectedNodeName:  "node-1",
 			},
-		},
-		{
-			name: "provision with selected node, but node does not exist",
-			objs: []runtime.Object{
-				newStorageClassWithVolumeBindingMode("class-1", "foo.bar/baz", &modeWait),
-				newClaim("claim-1", "uid-1-1", "class-1", "foo.bar/baz", "", map[string]string{annSelectedNode: "node-1"}),
-			},
-			expectedParams: nil,
 		},
 	}
 	for _, test := range tests {
@@ -2084,7 +2041,7 @@ func newNode(nodeName string) *v1.Node {
 }
 
 type provisionParams struct {
-	selectedNode      *v1.Node
+	selectedNodeName  string
 	allowedTopologies []v1.TopologySelectorTerm
 }
 
@@ -2136,7 +2093,7 @@ func (p *testBlockProvisioner) SupportsBlock(ctx context.Context) bool {
 
 func (p *testProvisioner) Provision(ctx context.Context, options ProvisionOptions) (*v1.PersistentVolume, ProvisioningState, error) {
 	p.provisionCalls <- provisionParams{
-		selectedNode:      options.SelectedNode,
+		selectedNodeName:  options.SelectedNodeName,
 		allowedTopologies: options.StorageClass.AllowedTopologies,
 	}
 

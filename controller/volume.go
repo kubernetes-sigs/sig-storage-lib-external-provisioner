@@ -20,7 +20,7 @@ import (
 	"context"
 	"fmt"
 
-	"k8s.io/api/core/v1"
+	v1 "k8s.io/api/core/v1"
 	storageapis "k8s.io/api/storage/v1"
 )
 
@@ -129,5 +129,5 @@ type ProvisionOptions struct {
 	PVC *v1.PersistentVolumeClaim
 
 	// Node selected by the scheduler for the volume.
-	SelectedNode *v1.Node
+	SelectedNodeName string
 }
