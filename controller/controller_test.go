@@ -44,6 +44,7 @@ import (
 	"k8s.io/client-go/kubernetes/scheme"
 	testclient "k8s.io/client-go/testing"
 	"k8s.io/client-go/tools/cache"
+	"k8s.io/client-go/tools/record"
 	ref "k8s.io/client-go/tools/reference"
 	"k8s.io/client-go/util/workqueue"
 	klog "k8s.io/klog/v2"
@@ -1096,6 +1097,73 @@ func TestShouldProvision(t *testing.T) {
 			}
 			if (err != nil && test.expectedError == false) || (err == nil && test.expectedError == true) {
 				t.Errorf("expected error %v but got %v\n", test.expectedError, err)
+			}
+		})
+	}
+}
+
+func TestDeleteVolumeErrorHandling(t *testing.T) {
+	tests := []struct {
+		name            string
+		deleteErr       error
+		expectErr       bool
+		expectedEvent   string
+		expectedMetrics testMetrics
+	}{
+		{
+			name:            "generic error emits a warning event and counts as failure",
+			deleteErr:       errors.New("fake error"),
+			expectErr:       true,
+			expectedEvent:   "Warning VolumeFailedDelete fake error",
+			expectedMetrics: testMetrics{deleted: counts{"": {failed: 1}}},
+		},
+		{
+			name:          "volume in use emits a normal event and is not counted",
+			deleteErr:     &VolumeInUseError{Reason: "volume is still attached to node-1"},
+			expectErr:     true,
+			expectedEvent: "Normal VolumeDelete volume is still attached to node-1",
+		},
+		{
+			name:            "ignored error emits no event",
+			deleteErr:       &IgnoredError{Reason: "not ours"},
+			expectedMetrics: testMetrics{deleted: counts{"": {success: 1}}},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			volume := newVolume("volume-1", v1.VolumeReleased, v1.PersistentVolumeReclaimDelete, map[string]string{annDynamicallyProvisioned: "foo.bar/baz"}, nil, nil)
+			client := fake.NewSimpleClientset(volume)
+			_, ctx := ktesting.NewTestContext(t)
+			ctrl := newTestProvisionController(ctx, client, "foo.bar/baz", newDeleteErrorProvisioner(test.deleteErr))
+			recorder := record.NewFakeRecorder(10)
+			ctrl.eventRecorder = recorder
+
+			err := ctrl.syncVolume(ctx, volume)
+			if test.expectErr && err == nil {
+				t.Fatal("expected error, got none")
+			}
+			if !test.expectErr && err != nil {
+				t.Fatalf("expected no error, got %v", err)
+			}
+
+			if _, err := client.CoreV1().PersistentVolumes().Get(ctx, volume.Name, metav1.GetOptions{}); err != nil {
+				t.Fatalf("expected volume to still exist, got %v", err)
+			}
+
+			tm := ctrl.getMetrics(t)
+			if !reflect.DeepEqual(test.expectedMetrics, tm) {
+				t.Errorf("expected metrics:\n %+v\n but got:\n %+v", test.expectedMetrics, tm)
+			}
+
+			select {
+			case event := <-recorder.Events:
+				if event != test.expectedEvent {
+					t.Errorf("expected event %q, got %q", test.expectedEvent, event)
+				}
+			default:
+				if test.expectedEvent != "" {
+					t.Errorf("expected event %q, got none", test.expectedEvent)
+				}
 			}
 		})
 	}
@@ -2192,6 +2260,21 @@ var _ Provisioner = &noChangeTestProvisioner{}
 
 func (p *noChangeTestProvisioner) Provision(ctx context.Context, options ProvisionOptions) (*v1.PersistentVolume, ProvisioningState, error) {
 	return nil, ProvisioningNoChange, errors.New("fake error, no change")
+}
+
+func newDeleteErrorProvisioner(err error) Provisioner {
+	return &deleteErrorProvisioner{err: err}
+}
+
+type deleteErrorProvisioner struct {
+	badTestProvisioner
+	err error
+}
+
+var _ Provisioner = &deleteErrorProvisioner{}
+
+func (p *deleteErrorProvisioner) Delete(ctx context.Context, volume *v1.PersistentVolume) error {
+	return p.err
 }
 
 func newIgnoredProvisioner(ctx context.Context) Provisioner {

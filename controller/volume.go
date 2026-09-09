@@ -43,6 +43,10 @@ type Provisioner interface {
 	//
 	// May return IgnoredError to indicate that the call has been ignored and no
 	// action taken.
+	//
+	// May return VolumeInUseError to indicate that the volume is still in use
+	// (e.g. attached to a node) and cannot be deleted yet. The controller will
+	// retry the deletion later without reporting it as a failure.
 	Delete(context.Context, *v1.PersistentVolume) error
 }
 
@@ -110,6 +114,21 @@ type IgnoredError struct {
 
 func (e *IgnoredError) Error() string {
 	return fmt.Sprintf("ignored because %s", e.Reason)
+}
+
+// VolumeInUseError is the value for Delete to return to indicate that the
+// volume cannot be deleted yet because it is still in use, e.g. it is still
+// attached to a node and waiting for detach. This is expected during normal
+// operation when a workload and its PVC are deleted at the same time, so the
+// controller retries the deletion with the usual backoff but emits a Normal
+// VolumeDelete event instead of a Warning VolumeFailedDelete event and does
+// not count the attempt in the failed delete metric.
+type VolumeInUseError struct {
+	Reason string
+}
+
+func (e *VolumeInUseError) Error() string {
+	return e.Reason
 }
 
 // ProvisionOptions contains all information required to provision a volume
