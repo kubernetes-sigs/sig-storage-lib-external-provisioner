@@ -1351,6 +1351,10 @@ func (ctrl *ProvisionController) updateProvisionStats(claim *v1.PersistentVolume
 
 func (ctrl *ProvisionController) updateDeleteStats(volume *v1.PersistentVolume, err error, startTime time.Time) {
 	class := volume.Spec.StorageClassName
+	if _, ok := err.(*VolumeInUseError); ok {
+		// Deletion was postponed, not failed. Nothing to record.
+		return
+	}
 	if err != nil {
 		ctrl.metrics.PersistentVolumeDeleteFailedTotal.WithLabelValues(class).Inc()
 	} else {
@@ -1639,6 +1643,12 @@ func (ctrl *ProvisionController) deleteVolumeOperation(ctx context.Context, volu
 			// Delete ignored, do nothing and hope another provisioner will delete it.
 			logger.V(4).Info("Volume deletion ignored", "reason", ierr)
 			return nil
+		}
+		if inUseErr, ok := err.(*VolumeInUseError); ok {
+			// Volume is still in use, retry later without treating it as a failure.
+			logger.V(4).Info("Volume deletion postponed", "reason", inUseErr.Reason)
+			ctrl.eventRecorder.Event(volume, v1.EventTypeNormal, "VolumeDelete", err.Error())
+			return err
 		}
 		// Delete failed, emit an event.
 		logger.Error(err, "Volume deletion failed")
