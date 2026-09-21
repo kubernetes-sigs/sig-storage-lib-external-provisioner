@@ -6,6 +6,7 @@
 
 ### Feature
 
+- Provisioners can return `VolumeInUseError` from `Delete` to signal that a volume is still in use; the controller then retries without emitting a `VolumeFailedDelete` warning. ([#206](https://github.com/kubernetes-sigs/sig-storage-lib-external-provisioner/pull/206), [@WanzenBug](https://github.com/WanzenBug))
 - Updated dependencies to Kubernetes 1.37 ([#204](https://github.com/kubernetes-sigs/sig-storage-lib-external-provisioner/pull/204), [@jsafrane](https://github.com/jsafrane))
 
 ## Dependencies
