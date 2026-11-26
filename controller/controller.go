@@ -1033,6 +1033,11 @@ func (ctrl *ProvisionController) processNextVolumeWorkItem(ctx context.Context) 
 		defer ctrl.volumeQueue.Done(key)
 
 		if err := ctrl.syncVolumeHandler(ctx, key); err != nil {
+			if inUseErr, ok := err.(*VolumeInUseError); ok {
+				logger.V(4).Info("Retrying syncing volume because it is still in use", "key", key, "failures", ctrl.volumeQueue.NumRequeues(key), "reason", inUseErr.Reason)
+				ctrl.volumeQueue.AddRateLimited(key)
+				return nil
+			}
 			if ctrl.failedDeleteThreshold == 0 {
 				logger.Info("Retrying syncing volume", "key", key, "failures", ctrl.volumeQueue.NumRequeues(key))
 				ctrl.volumeQueue.AddRateLimited(key)
@@ -1647,7 +1652,10 @@ func (ctrl *ProvisionController) deleteVolumeOperation(ctx context.Context, volu
 		if inUseErr, ok := err.(*VolumeInUseError); ok {
 			// Volume is still in use, retry later without treating it as a failure.
 			logger.V(4).Info("Volume deletion postponed", "reason", inUseErr.Reason)
-			ctrl.eventRecorder.Event(volume, v1.EventTypeNormal, "VolumeDelete", err.Error())
+			// Only report it on the first attempt.
+			if ctrl.volumeQueue.NumRequeues(volume.Name) == 0 {
+				ctrl.eventRecorder.Event(volume, v1.EventTypeNormal, "VolumeDelete", err.Error())
+			}
 			return err
 		}
 		// Delete failed, emit an event.
