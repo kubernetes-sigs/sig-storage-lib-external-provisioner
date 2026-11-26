@@ -1104,8 +1104,10 @@ func TestShouldProvision(t *testing.T) {
 
 func TestDeleteVolumeErrorHandling(t *testing.T) {
 	tests := []struct {
-		name            string
-		deleteErr       error
+		name      string
+		deleteErr error
+		// priorRequeues is how often the volume was already retried.
+		priorRequeues   int
 		expectErr       bool
 		expectedEvent   string
 		expectedMetrics testMetrics
@@ -1124,6 +1126,12 @@ func TestDeleteVolumeErrorHandling(t *testing.T) {
 			expectedEvent: "Normal VolumeDelete volume is still attached to node-1",
 		},
 		{
+			name:          "volume in use emits no event once it is being retried",
+			deleteErr:     &VolumeInUseError{Reason: "volume is still attached to node-1"},
+			priorRequeues: 1,
+			expectErr:     true,
+		},
+		{
 			name:            "ignored error emits no event",
 			deleteErr:       &IgnoredError{Reason: "not ours"},
 			expectedMetrics: testMetrics{deleted: counts{"": {success: 1}}},
@@ -1137,6 +1145,9 @@ func TestDeleteVolumeErrorHandling(t *testing.T) {
 			ctrl := newTestProvisionController(ctx, client, "foo.bar/baz", newDeleteErrorProvisioner(test.deleteErr))
 			recorder := record.NewFakeRecorder(10)
 			ctrl.eventRecorder = recorder
+			for i := 0; i < test.priorRequeues; i++ {
+				ctrl.volumeQueue.AddRateLimited(volume.Name)
+			}
 
 			err := ctrl.syncVolume(ctx, volume)
 			if test.expectErr && err == nil {
@@ -1164,6 +1175,78 @@ func TestDeleteVolumeErrorHandling(t *testing.T) {
 				if test.expectedEvent != "" {
 					t.Errorf("expected event %q, got none", test.expectedEvent)
 				}
+			}
+		})
+	}
+}
+
+func TestProcessNextVolumeWorkItemErrorReporting(t *testing.T) {
+	tests := []struct {
+		name          string
+		deleteErr     error
+		expectHandled bool
+	}{
+		{
+			name:          "generic error is reported",
+			deleteErr:     errors.New("fake error"),
+			expectHandled: true,
+		},
+		{
+			name:      "volume in use is retried without being reported",
+			deleteErr: &VolumeInUseError{Reason: "volume is still attached to node-1"},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			volume := newVolume("volume-1", v1.VolumeReleased, v1.PersistentVolumeReclaimDelete, map[string]string{annDynamicallyProvisioned: "foo.bar/baz"}, nil, nil)
+			client := fake.NewSimpleClientset(volume)
+
+			// Log at the default verbosity, so that the test sees what an
+			// administrator would see without extra logging flags.
+			logger := ktesting.NewLogger(t, ktesting.NewConfig(ktesting.Verbosity(0), ktesting.BufferLogs(true)))
+			ctx := klog.NewContext(context.Background(), logger)
+
+			ctrl := newTestProvisionController(ctx, client, "foo.bar/baz", newDeleteErrorProvisioner(test.deleteErr))
+			ctrl.eventRecorder = record.NewFakeRecorder(10)
+			if err := ctrl.volumes.Add(volume); err != nil {
+				t.Fatalf("error adding volume %v to cache: %v", volume, err)
+			}
+
+			var handled []error
+			defer func(original []utilruntime.ErrorHandler) { utilruntime.ErrorHandlers = original }(utilruntime.ErrorHandlers)
+			utilruntime.ErrorHandlers = []utilruntime.ErrorHandler{
+				func(_ context.Context, err error, _ string, _ ...interface{}) {
+					handled = append(handled, err)
+				},
+			}
+
+			ctrl.volumeQueue.Add(volume.Name)
+			if !ctrl.processNextVolumeWorkItem(ctx) {
+				t.Fatal("expected the worker to keep processing the queue")
+			}
+
+			if test.expectHandled && len(handled) != 1 {
+				t.Errorf("expected the error to be reported once, got %v", handled)
+			}
+			if !test.expectHandled && len(handled) != 0 {
+				t.Errorf("expected the error not to be reported, got %v", handled)
+			}
+
+			// A volume that is still in use must not log anything at the
+			// default verbosity either, otherwise deleting many volumes at
+			// once floods the log.
+			log := logger.GetSink().(ktesting.Underlier).GetBuffer().Data()
+			if test.expectHandled && len(log) == 0 {
+				t.Error("expected the failure to be logged, got nothing")
+			}
+			if !test.expectHandled && len(log) != 0 {
+				t.Errorf("expected nothing to be logged, got %v", log)
+			}
+
+			// Either way the volume must be retried, otherwise it would never
+			// be deleted.
+			if requeues := ctrl.volumeQueue.NumRequeues(volume.Name); requeues != 1 {
+				t.Errorf("expected the volume to be requeued once, got %d requeues", requeues)
 			}
 		})
 	}
